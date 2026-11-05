@@ -2,7 +2,7 @@
 
 **Decentralised cross-chain message verification. No trusted relay, no admin, no server in the middle.**
 
-A user sends a message from their own wallet on **Blockchain A** (Ethereum Sepolia). Three **independent validators**, each on a different laptop with its own key and its own RPC provider, read Chain A by themselves and vote directly on **Blockchain B** (Polygon Amoy). The contract on Chain B delivers the message only when **2 of 3** agree on the exact same content.
+**Two people, two wallets, two blockchains.** Person 1 sends a message from their own wallet on **Blockchain A** (Ethereum Sepolia) and names Person 2's wallet. Three **independent validators**, each on a different laptop with its own key and its own RPC provider, read Chain A by themselves and vote directly on **Blockchain B**. The contract on Chain B delivers the message to Person 2 only when **2 of 3** agree on the exact same content, sender and recipient. Then **only Person 2** can accept it, signing on Chain B with their own wallet.
 
 ## What changed from v1
 
@@ -14,6 +14,7 @@ A user sends a message from their own wallet on **Blockchain A** (Ethereum Sepol
 | Local Hardhat chains that reset | Real public testnets: Sepolia → Amoy. Every step is visible on Etherscan / Polygonscan. |
 | Backend sent the transaction for the user | User signs in their own MetaMask (works on phones). |
 | No finality handling | Validators wait N confirmations and re-check the block hash (reorg-aware). |
+| "Bob" was just text inside the message | A **real recipient wallet** is part of every vote, and only that wallet can `accept()` on Chain B. |
 
 ## How it works
 
@@ -29,10 +30,11 @@ A user sends a message from their own wallet on **Blockchain A** (Ethereum Sepol
  └──────────────┘                                                     └────────────────┘
 ```
 
-1. **Send.** User calls `VeriMashSource.sendMessage()` on Chain A from their own wallet. It emits `MessageSent(nonce, sender, destChainId, message)`.
+1. **Send (Person 1, Chain A).** Calls `VeriMashSource.sendMessage(destChainId, recipient, message)` from their own wallet. It emits `MessageSent(nonce, sender, destChainId, recipient, message)`.
 2. **Verify.** Each validator independently waits for confirmations, re-reads the receipt, checks the block hash is still canonical, and checks the event really came from the source contract.
-3. **Vote.** Each validator calls `VeriMashGate.attest(nonce, sender, message)` on Chain B from its own key.
-4. **Deliver.** The vote is bound to `(chainA, sourceContract, chainB, gate, nonce, sender, hash(message))`. When 2 validators vote for the same key, the gate emits `MessageDelivered`. Exactly once.
+3. **Vote.** Each validator calls `VeriMashGate.attest(nonce, sender, recipient, message)` on Chain B from its own key.
+4. **Deliver.** The vote is bound to `(chainA, sourceContract, chainB, gate, nonce, sender, recipient, hash(message))`. When 2 validators vote for the same key, the gate emits `MessageDelivered` for that recipient. Exactly once.
+5. **Accept (Person 2, Chain B).** The recipient calls `VeriMashGate.accept(nonce)` from their own wallet. Anyone else gets `Gate: only the recipient can accept`.
 
 ## Project structure
 
@@ -42,13 +44,14 @@ contracts/VeriMashGate.sol        Chain B: counts validator votes, delivers at t
 validator/validator.js            The validator each teammate runs on their own laptop
 validator/validator.env.example   Template for one validator's settings
 frontend/index.html               Landing page (v1 design, v2 wording)
-frontend/app.html + app.js        The app, v1 layout: Overview, Workspace, Validators, Explorer,
-                                  Security Lab, Live Demo. Reads both chains directly; no backend.
+frontend/app.html + app.js        The app, v1 layout: Overview, Workspace, My Inbox (receiver),
+                                  Validators, Explorer, Security Lab, Live Demo. No backend.
 scripts/deploy.js                 Deploys both contracts, writes deployment.json + frontend/config.js
 scripts/local.js                  One-command local stack (2 chains + 3 validators + web app)
 scripts/attack.js                 Security Lab: tries 5 attacks, shows each is rejected
 scripts/test-e2e.js               Full end-to-end test
 scripts/keygen.js                 Makes a new validator wallet
+scripts/fund-local.js             npm run fund -- 0xAddr…  → 100 coins on your LOCAL Chain B
 ```
 
 ---
@@ -64,7 +67,7 @@ npm test             # full end-to-end test, should end with "All checks passed"
 npm run local        # starts 2 chains + 3 validators + web app
 ```
 
-Open **http://localhost:8080** and click **Open application**. In local mode, without MetaMask, the app uses a built-in demo wallet automatically. Go to **Transaction Workspace** or **Live Transaction Demo**, press send, and watch the five-stage journey fill in live while the validator logs scroll in the terminal. Then look at **Validators** (vote matrix), **Explorer** (full proof per message) and **Security Lab** (four attacks against the live contract).
+Open **http://localhost:8080** and click **Open application**. In local mode, without MetaMask, the app uses two built-in demo wallets automatically: Person 1 (sender) and Person 2 (receiver, pre-filled as the recipient). After sending, open **My Inbox** → **Connect receiver wallet** → **Accept**. Go to **Transaction Workspace** or **Live Transaction Demo**, press send, and watch the five-stage journey fill in live while the validator logs scroll in the terminal. Then look at **Validators** (vote matrix), **Explorer** (full proof per message) and **Security Lab** (four attacks against the live contract).
 
 In a second terminal, while `npm run local` is running:
 
@@ -87,6 +90,7 @@ Same landing page, sidebar, five sections and styling. Underneath:
 | Security Lab called backend test routes | Security Lab runs read-only `eth_call`s against the real deployed gate |
 | Startup screen waited for Render to wake | Startup screen just waits until both chains answer |
 | — | **New Validators page**: each validator's status, votes, gas, and the vote matrix |
+| "Bob" only existed in the text | **Recipient field** + new **My Inbox** page where the receiver accepts with their own wallet; a 6th journey stage "Accepted by the recipient" |
 
 ---
 
@@ -99,16 +103,18 @@ This is the setup that already worked: Chain A is the real Sepolia, Chain B runs
 cd hardhat && npx hardhat --config chainB.config.js node --hostname 0.0.0.0 --port 8546
 ```
 ```bash
-# Terminal 2: give the deployer + 3 validator addresses 100 coins each on Chain B
-for A in BOSS_ADDR V1_ADDR V2_ADDR V3_ADDR; do
-  curl -s -X POST -H 'content-type: application/json' \
-  --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hardhat_setBalance\",\"params\":[\"$A\",\"0x56BC75E2D63100000\"]}" \
-  http://127.0.0.1:8546; echo
-done
+# Terminal 2: give coins on Chain B to the deployer, the 3 validators AND the receiver wallet
+npm run fund -- BOSS_ADDR V1_ADDR V2_ADDR V3_ADDR RECEIVER_ADDR
 ```
 `.env`: `CHAIN_A_RPC=<your Alchemy Sepolia URL>`, `CHAIN_B_RPC=http://127.0.0.1:8546`, `DEPLOYER_KEY=<boss private key>` (needs ~0.01 Sepolia ETH), `VALIDATORS=<3 addresses>`. Then `npm run deploy:testnet`.
 
 Each validator env file (`validator/v1.env`, `v2.env`, `v3.env`): its own `VALIDATOR_KEY`, `SOURCE_RPC=<Alchemy Sepolia URL>`, `DEST_RPC=http://127.0.0.1:8546`, and **`LOG_CHUNK=10`** (Alchemy's free plan only allows 10-block log queries). Start each with `npm run validator -- --env validator/v1.env`, then `npm run serve` and open http://localhost:8080.
+
+**Two people with one MetaMask (solo test):** use two MetaMask accounts.
+- **Sender** = the account with Sepolia ETH (e.g. "Imported Account 1"). In **Transaction Workspace**, paste the **receiver account's address** in the recipient field and send. MetaMask switches to Sepolia.
+- **Receiver** = another account (e.g. "Account 1"). Give it Chain B coins: `npm run fund -- <its address>`. Switch MetaMask to that account, open **My Inbox**, click **Connect receiver wallet** (MetaMask adds/switches to "Local Chain B"; approve), then **Accept**. Make sure the localhost site is connected to that account (MetaMask → Permissions → localhost:8080).
+
+> ⚠ Anything deployed before the recipient update must be **redeployed** (`npm run deploy:testnet`) — the contracts changed.
 
 ---
 
@@ -134,7 +140,8 @@ npm run keygen
 | Wallet | Needs |
 |---|---|
 | Deployer | a little **Sepolia ETH** and a little **Amoy POL** |
-| Each validator address | a little **Amoy POL** (it votes on Chain B) |
+| Each validator address | a little **Chain B gas** (it votes on Chain B) |
+| Receiver's MetaMask (phone 2) | a little **Chain B gas** (to accept) |
 | Sender's MetaMask (phone 1) | a little **Sepolia ETH** |
 
 Faucets: Google Cloud Web3 faucet (Sepolia, just a Google login). Amoy faucets are unreliable, so the recommended Chain B is **Base Sepolia** (chain ID 84532): get Sepolia ETH from the Google faucet and move some to Base Sepolia with Base's official Sepolia bridge (linked from docs.base.org). Then set `CHAIN_B_RPC=https://sepolia.base.org` (or an Alchemy Base Sepolia URL). The code needs no changes; the app labels and explorer links switch automatically. Some faucets ask for a small real mainnet balance or a login, and most limit amounts per day, so collect tokens **a day early** and pool them.
@@ -172,9 +179,9 @@ For a public link, **both chains must be public** (e.g. Sepolia → Base Sepolia
 
 ### Step 6: demo script (2 minutes)
 
-1. **Phone 1** opens the Vercel link **inside the MetaMask app browser**, opens the **Live Transaction Demo**, taps **Connect wallet**, sends "Invoice INV-2048 paid by Alice".
+1. **Phone 1** opens the Vercel link **inside the MetaMask app browser**, opens the **Live Transaction Demo**, pastes **Bob's wallet address** (phone 2), and sends "Invoice INV-2048 paid by Alice".
 2. All 3 laptop terminals print `verified … → attesting`. The journey shows the votes filling in.
-3. **Phone 2** (no wallet needed) on the **Explorer** page sees the message arrive. Tap a tx link in the details to show it on the block explorer.
+3. **Phone 2** (Bob, his own MetaMask) opens **My Inbox** → **Connect receiver wallet**. The message appears with a badge; he taps **Accept** and signs on Chain B. Phone 1's journey flips to **"Accepted by recipient"**. Show the full proof in **Explorer** → View.
 4. **Close one laptop lid.** Send again. Still delivered, because 2 of 3 is enough.
 5. **Close a second lid.** Send again. It sits at **1 vote, NOT delivered** — show it on the **Validators** page vote matrix.
 6. **Open a lid again.** That validator catches up and the message is delivered. Decentralisation, live.
@@ -188,6 +195,8 @@ For a public link, **both chains must be public** (e.g. Sepolia → Base Sepolia
 |---|---|
 | A non-validator (hacker, relayer, our own server) calls `attest` | Rejected: `Gate: not a validator` |
 | One corrupt validator votes for a message that never happened on Chain A | Stuck at 1 vote, never delivered |
+| Re-route a delivered message to the attacker's wallet | Rejected: `Gate: conflicting message for delivered nonce` |
+| A stranger calls `accept()` on someone else's message | Rejected: `Gate: only the recipient can accept` |
 | That validator votes twice to fake a majority | Rejected: `Gate: validator already attested` |
 | Change one character of a delivered message | Rejected: `Gate: conflicting message for delivered nonce` |
 | Replay a delivered message | Rejected: `Gate: validator already attested` |

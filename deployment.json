@@ -1,5 +1,5 @@
 {
-  "createdAt": "2026-11-05T16:46:54.774Z",
+  "createdAt": "2026-11-05T18:32:31.590Z",
   "local": false,
   "threshold": 2,
   "confirmations": 2,
@@ -10,8 +10,8 @@
     "explorer": "https://sepolia.etherscan.io",
     "publicRpc": "https://ethereum-sepolia-rpc.publicnode.com",
     "rpc": "https://ethereum-sepolia-rpc.publicnode.com",
-    "source": "0x581fBFaC2d986A2a14F36d20DFb4064DBb7A320d",
-    "deployBlock": 12070757
+    "source": "0xf2a14ddFa5c6b212D95DDd89E68cE365Dc0633b0",
+    "deployBlock": 12071278
   },
   "chainB": {
     "chainId": 31338,
@@ -20,8 +20,8 @@
     "explorer": "",
     "publicRpc": "http://127.0.0.1:8546",
     "rpc": "http://127.0.0.1:8546",
-    "gate": "0xdf394dde7C69A26c63dF10427BCD9Fe78B1cC196",
-    "deployBlock": 152
+    "gate": "0x29FbA6c546a0Cc426df153e3BA4FCB2151a53efD",
+    "deployBlock": 3319
   },
   "validators": [
     {

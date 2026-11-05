@@ -10,6 +10,7 @@
 //   3. Re-checks the evidence itself: receipt succeeded, block hash still canonical,
 //      event really came from the VeriMashSource contract, destination is our Chain B.
 //   4. Submits its own attest() vote to the gate on Chain B, from its own key.
+//      The vote covers the sender, the RECIPIENT and the exact message.
 // The gate delivers the message only when 2 of 3 validators have voted for the same content.
 //
 // Usage:  npm run validator -- --env validator1.env
@@ -58,7 +59,7 @@ async function runValidator(cfg = {}) {
 
   async function verifyAndVote(lg) {
     const ev = iface.parseLog(lg);
-    const nonce = ev.args.nonce, sender = ev.args.sender, destChainId = ev.args.destChainId, message = ev.args.message;
+    const nonce = ev.args.nonce, sender = ev.args.sender, destChainId = ev.args.destChainId, recipient = ev.args.recipient, message = ev.args.message;
     const tag = `#${nonce} "${message.length > 40 ? message.slice(0, 40) + "…" : message}"`;
 
     if (Number(destChainId) !== deployment.chainB.chainId) return log(`${C.dim}skip ${tag}: addressed to chain ${destChainId}${C.reset}`);
@@ -75,24 +76,24 @@ async function runValidator(cfg = {}) {
     if (!inReceipt) return log(`${C.red}REJECT ${tag}: event not found in receipt${C.reset}`);
 
     // --- Already handled? ---
-    const k = await gate.messageKey(nonce, sender, message);
+    const k = await gate.messageKey(nonce, sender, recipient, message);
     if (await gate.hasVoted(k, wallet.address)) return; // our vote is already on chain
     const done = await gate.deliveredKeyForNonce(nonce);
     if (done !== ethers.ZeroHash && done !== k) return log(`${C.red}REJECT ${tag}: different content already delivered for this nonce${C.reset}`);
 
     // --- Vote ---
-    log(`verified ${tag} from ${sender.slice(0, 8)}… in block ${lg.blockNumber} → attesting on Chain B`);
+    log(`verified ${tag} from ${sender.slice(0, 8)}… to ${recipient.slice(0, 8)}… in block ${lg.blockNumber} → attesting on Chain B`);
     try {
       // Gas buffer: if another validator's vote lands first, ours may become the one that
       // triggers delivery (more storage writes) — so never send with a tight estimate.
-      const est = await gate.attest.estimateGas(nonce, sender, message);
+      const est = await gate.attest.estimateGas(nonce, sender, recipient, message);
       const gasLimit = est * 2n + 150000n + 25000n * BigInt(Math.ceil(Buffer.byteLength(message) / 32));
-      const tx = await gate.attest(nonce, sender, message, { gasLimit, ...(await feeOverrides(dst)) });
+      const tx = await gate.attest(nonce, sender, recipient, message, { gasLimit, ...(await feeOverrides(dst)) });
       const r = await tx.wait();
       const att = r.logs.map((l) => { try { return gate.interface.parseLog(l); } catch { return null; } }).filter(Boolean);
       const votes = att.find((e) => e.name === "Attested")?.args.votes;
       const delivered = att.some((e) => e.name === "MessageDelivered");
-      log(`${C.green}✓ vote recorded${C.reset} ${tag} — ${votes} vote(s), ${deployment.threshold} needed${delivered ? ` ${C.green}${C.bold}→ DELIVERED on Chain B${C.reset}` : ""} (tx ${r.hash.slice(0, 12)}…)`);
+      log(`${C.green}✓ vote recorded${C.reset} ${tag} — ${votes} vote(s), ${deployment.threshold} needed${delivered ? ` ${C.green}${C.bold}→ DELIVERED on Chain B, waiting for the recipient to accept${C.reset}` : ""} (tx ${r.hash.slice(0, 12)}…)`);
     } catch (e) {
       const why = reason(e);
       if (/already attested/i.test(why)) return;

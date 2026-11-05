@@ -50,7 +50,8 @@ async function startStack({ withServer = true, quietValidators = false, validato
     threshold: 2,
     confirmations: 2,
     local: true,
-    demoKey: devKey(4),
+    demoKey: devKey(4),          // demo sender (Person 1) on Chain A
+    demoRecipientKey: devKey(6), // demo recipient (Person 2) on Chain B
   });
 
   const running = {};
@@ -63,7 +64,7 @@ async function startStack({ withServer = true, quietValidators = false, validato
 
   const server = withServer ? serve(8080) : null;
   const stop = () => { Object.keys(running).forEach(stopValidator); server?.close(); chains.forEach((c) => c.kill()); };
-  return { deployment, keys: { deployer: devKey(0), validators: vKeys, demo: devKey(4), attacker: devKey(5) }, startValidator, stopValidator, stop };
+  return { deployment, keys: { deployer: devKey(0), validators: vKeys, demo: devKey(4), attacker: devKey(5), recipient: devKey(6) }, startValidator, stopValidator, stop };
 }
 
 module.exports = { startStack, devKey };

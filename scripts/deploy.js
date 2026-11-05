@@ -19,7 +19,7 @@ const PRESETS = {
 async function deploy(opts) {
   const {
     rpcA, rpcB, deployerKey, validators, validatorNames = [], threshold = 2,
-    confirmations = 2, local = false, browserRpcA, browserRpcB, demoKey,
+    confirmations = 2, local = false, browserRpcA, browserRpcB, demoKey, demoRecipientKey,
   } = opts;
 
   const provA = new ethers.JsonRpcProvider(rpcA);
@@ -63,7 +63,7 @@ async function deploy(opts) {
   };
 
   fs.writeFileSync(path.join(ROOT, "deployment.json"), JSON.stringify(deployment, null, 2));
-  const frontendCfg = { ...deployment, demoKey: local ? demoKey : undefined, abis: { source: S.abi, gate: G.abi } };
+  const frontendCfg = { ...deployment, demoKey: local ? demoKey : undefined, demoRecipientKey: local ? demoRecipientKey : undefined, abis: { source: S.abi, gate: G.abi } };
   fs.writeFileSync(path.join(ROOT, "frontend", "config.js"), `window.VERIMASH = ${JSON.stringify(frontendCfg, null, 2)};\n`);
   console.log("Wrote deployment.json and frontend/config.js");
   return deployment;

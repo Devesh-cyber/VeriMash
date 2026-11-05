@@ -1,7 +1,7 @@
 {
   "name": "verimash-v2",
   "version": "2.0.0",
-  "description": "VeriMash v2 \u2014 decentralised cross-chain message verification",
+  "description": "VeriMash v2 — decentralised cross-chain message verification",
   "scripts": {
     "postinstall": "node scripts/compile.js",
     "compile": "node scripts/compile.js",
@@ -11,7 +11,8 @@
     "validator": "node validator/validator.js",
     "attack": "node scripts/attack.js",
     "keygen": "node scripts/keygen.js",
-    "serve": "node scripts/serve.js"
+    "serve": "node scripts/serve.js",
+    "fund": "node scripts/fund-local.js"
   },
   "author": "",
   "license": "ISC",

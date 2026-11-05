@@ -3,7 +3,8 @@
  * Same interface as v1, but there is no VeriMash backend any more:
  *  - the user signs the source transaction in their own wallet (MetaMask)
  *  - the page reads both blockchains directly through public RPCs
- *  - delivery happens when independent validators vote on Chain B */
+ *  - delivery happens when independent validators vote on Chain B
+ *  - the named recipient accepts it on Chain B from their own wallet */
 const cfg = window.VERIMASH;
 const $ = id => document.getElementById(id);
 const short = (v, start = 11, end = 7) => v && String(v).length > start + end + 2 ? `${String(v).slice(0, start)}…${String(v).slice(-end)}` : String(v ?? '—');
@@ -16,7 +17,7 @@ function reasonOf(e) {
 }
 
 /* ---------- navigation (unchanged from v1, plus Validators) ---------- */
-const VIEWS = { overview: 'Overview', workspace: 'Transaction Workspace', validators: 'Validators', demo: 'Live Transaction Demo', explorer: 'Transaction Explorer', security: 'Security Lab' };
+const VIEWS = { overview: 'Overview', workspace: 'Transaction Workspace', inbox: 'My Inbox', validators: 'Validators', demo: 'Live Transaction Demo', explorer: 'Transaction Explorer', security: 'Security Lab' };
 function navigate(name) {
   if (!VIEWS[name]) name = 'overview';
   document.querySelectorAll('.app-view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
@@ -45,9 +46,10 @@ function main() {
   const gate = new ethers.Contract(cfg.chainB.gate, cfg.abis.gate, pB);
   const coder = ethers.AbiCoder.defaultAbiCoder();
   const N = cfg.validators.length, T = cfg.threshold;
-  const keyFor = (nonce, sender, message) => ethers.keccak256(coder.encode(
-    ['uint256', 'address', 'uint256', 'address', 'uint64', 'address', 'bytes32'],
-    [cfg.chainA.chainId, cfg.chainA.source, cfg.chainB.chainId, cfg.chainB.gate, nonce, sender, ethers.keccak256(ethers.toUtf8Bytes(message))]));
+  const keyFor = (nonce, sender, recipient, message) => ethers.keccak256(coder.encode(
+    ['uint256', 'address', 'uint256', 'address', 'uint64', 'address', 'address', 'bytes32'],
+    [cfg.chainA.chainId, cfg.chainA.source, cfg.chainB.chainId, cfg.chainB.gate, nonce, sender, recipient, ethers.keccak256(ethers.toUtf8Bytes(message))]));
+  const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
   const vName = addr => cfg.validators.find(v => v.address.toLowerCase() === String(addr).toLowerCase())?.name || short(addr, 8, 6);
   const txUrl = (chain, hash) => chain.explorer ? `${chain.explorer}/tx/${hash}` : null;
 
@@ -72,9 +74,10 @@ function main() {
   let CHUNK = cfg.logChunk || 2000;
   const st = {
     headA: 0, headB: 0, nextA: cfg.chainA.deployBlock, nextB: cfg.chainB.deployBlock,
-    sent: new Map(),      // nonce -> {nonce, sender, message, txHash, block, key}
+    sent: new Map(),      // nonce -> {nonce, sender, recipient, message, txHash, block, key}
     votes: new Map(),     // key -> Map(validatorLower -> {txHash, block})
-    delivered: new Map(), // nonce -> {nonce, key, txHash, block, message, sender}
+    delivered: new Map(), // nonce -> {nonce, key, txHash, block, message, sender, recipient}
+    accepted: new Map(),  // nonce -> {txHash, block, recipient}
     voteCount: 0,
   };
   const votersOf = key => st.votes.get(key) || new Map();
@@ -92,7 +95,7 @@ function main() {
       for (const ev of evs) {
         if (Number(ev.args.destChainId) !== cfg.chainB.chainId) continue;
         const n = Number(ev.args.nonce);
-        st.sent.set(n, { nonce: n, sender: ev.args.sender, message: ev.args.message, txHash: ev.transactionHash, block: ev.blockNumber, key: keyFor(ev.args.nonce, ev.args.sender, ev.args.message) });
+        st.sent.set(n, { nonce: n, sender: ev.args.sender, recipient: ev.args.recipient, message: ev.args.message, txHash: ev.transactionHash, block: ev.blockNumber, key: keyFor(ev.args.nonce, ev.args.sender, ev.args.recipient, ev.args.message) });
       }
       st.nextA = to + 1;
     }
@@ -103,6 +106,7 @@ function main() {
       const to = Math.min(st.headB, st.nextB + CHUNK - 1);
       const att = await logs(gate, gate.filters.Attested(), st.nextB, to); if (!att) continue;
       const del = await logs(gate, gate.filters.MessageDelivered(), st.nextB, to); if (!del) continue;
+      const acc = await logs(gate, gate.filters.MessageAccepted(), st.nextB, to); if (!acc) continue;
       for (const ev of att) {
         if (!st.votes.has(ev.args.key)) st.votes.set(ev.args.key, new Map());
         const m = st.votes.get(ev.args.key), v = ev.args.validator.toLowerCase();
@@ -111,8 +115,9 @@ function main() {
       }
       for (const ev of del) {
         const n = Number(ev.args.nonce);
-        st.delivered.set(n, { nonce: n, key: ev.args.key, txHash: ev.transactionHash, block: ev.blockNumber, message: ev.args.message, sender: ev.args.sender });
+        st.delivered.set(n, { nonce: n, key: ev.args.key, txHash: ev.transactionHash, block: ev.blockNumber, message: ev.args.message, sender: ev.args.sender, recipient: ev.args.recipient });
       }
+      for (const ev of acc) st.accepted.set(Number(ev.args.nonce), { txHash: ev.transactionHash, block: ev.blockNumber, recipient: ev.args.recipient });
       st.nextB = to + 1;
     }
   }
@@ -139,61 +144,93 @@ function main() {
     }
     $('sent').textContent = st.sent.size;
     $('received').textContent = st.delivered.size;
-    $('audits').textContent = st.voteCount;
-    renderHistory(); renderValidators(); renderJourney(); renderDemo();
+    $('audits').textContent = st.accepted.size;
+    $('votesLabel').textContent = `Validator votes on Chain B: ${st.voteCount}`;
+    renderHistory(); renderValidators(); renderJourney(); renderDemo(); renderInbox();
     busy = false;
   }
   window.VM_REFRESH = refresh;
   $('refreshButton').addEventListener('click', refresh);
 
-  /* ---------- wallet ---------- */
-  let signerSource = null, account = null;
-  async function connectWallet() {
-    if (signerSource) return signerSource;
+  /* ---------- wallets ----------
+   * Two people, two chains. The SAME MetaMask can play either role: it is switched to
+   * Chain A to send (Person 1) and to Chain B to accept (Person 2).
+   * In local mode without MetaMask, built-in demo wallets play both people. */
+  let account = null;
+  const chainHex = chain => '0x' + chain.chainId.toString(16);
+  async function switchTo(chain) {
+    try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: chainHex(chain) }] }); }
+    catch (e) {
+      if (e.code === 4902 || /unrecognized|not added|addEthereumChain/i.test(e.message || '')) {
+        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{ chainId: chainHex(chain), chainName: chain.name, rpcUrls: [fixRpc(chain.rpc)], nativeCurrency: { name: chain.currency, symbol: chain.currency, decimals: 18 }, blockExplorerUrls: chain.explorer ? [chain.explorer] : undefined }] });
+      } else throw e;
+    }
+  }
+  function showAccount(addr, how) {
+    account = addr;
+    $('walletButton').textContent = `● ${short(addr, 6, 4)}`;
+    $('walletButton').classList.add('connected');
+    $('walletButton').title = how;
+    renderInbox();
+  }
+  /** Returns a signer on `chain` ('A' to send, 'B' to accept). */
+  async function signerOn(which) {
+    const chain = which === 'A' ? cfg.chainA : cfg.chainB;
     if (window.ethereum) {
       await window.ethereum.request({ method: 'eth_requestAccounts' });
-      const hex = '0x' + cfg.chainA.chainId.toString(16);
-      try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hex }] }); }
-      catch (e) {
-        if (e.code === 4902 || /unrecognized|not added/i.test(e.message || '')) {
-          await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{ chainId: hex, chainName: cfg.chainA.name, rpcUrls: [fixRpc(cfg.chainA.rpc)], nativeCurrency: { name: cfg.chainA.currency, symbol: cfg.chainA.currency, decimals: 18 }, blockExplorerUrls: cfg.chainA.explorer ? [cfg.chainA.explorer] : undefined }] });
-        } else throw e;
-      }
+      await switchTo(chain);
       const signer = await new ethers.BrowserProvider(window.ethereum).getSigner();
-      account = await signer.getAddress();
-      signerSource = new ethers.Contract(cfg.chainA.source, cfg.abis.source, signer);
-      window.ethereum.on?.('accountsChanged', () => location.reload());
-      window.ethereum.on?.('chainChanged', () => location.reload());
-    } else if (cfg.local && cfg.demoKey) {
-      const w = new ethers.Wallet(cfg.demoKey, pA);
-      account = w.address;
-      signerSource = new ethers.Contract(cfg.chainA.source, cfg.abis.source, w);
-    } else {
-      throw new Error('No wallet found. Install MetaMask, or on a phone open this page inside the MetaMask app browser.');
+      showAccount(await signer.getAddress(), `MetaMask on ${chain.name}`);
+      return signer;
     }
-    $('walletButton').textContent = `● ${short(account, 6, 4)}`;
-    $('walletButton').classList.add('connected');
-    $('walletButton').title = window.ethereum ? 'Connected with MetaMask' : 'Local demo wallet';
-    return signerSource;
+    if (cfg.local && cfg.demoKey) {
+      const w = which === 'A' ? new ethers.Wallet(cfg.demoKey, pA) : new ethers.Wallet(cfg.demoRecipientKey, pB);
+      showAccount(w.address, which === 'A' ? 'Local demo sender wallet (Person 1)' : 'Local demo receiver wallet (Person 2)');
+      return w;
+    }
+    throw new Error('No wallet found. Install MetaMask, or on a phone open this page inside the MetaMask app browser.');
+  }
+  if (window.ethereum) {
+    window.ethereum.on?.('accountsChanged', accs => { if (accs?.[0]) showAccount(ethers.getAddress(accs[0]), 'MetaMask'); });
+    window.ethereum.request({ method: 'eth_accounts' }).then(a => { if (a?.[0]) showAccount(ethers.getAddress(a[0]), 'MetaMask'); }).catch(() => {});
   }
   $('walletButton').addEventListener('click', async () => {
-    try { await connectWallet(); } catch (e) { notice(reasonOf(e)); navigate('overview'); }
+    try { await signerOn(location.hash === '#inbox' ? 'B' : 'A'); } catch (e) { notice(reasonOf(e)); navigate('overview'); }
   });
 
   /* ---------- sending (shared by Workspace and Live Demo) ---------- */
   const tracking = { workspace: null, demo: null };
-  async function sendMessage(slot, text) {
-    const contract = await connectWallet();
+  function checkRecipient(raw) {
+    const v = String(raw || '').trim();
+    if (!ethers.isAddress(v)) throw new Error('Enter the recipient\'s wallet address on Chain B (0x… 42 characters).');
+    return ethers.getAddress(v);
+  }
+  async function sendMessage(slot, text, recipientRaw) {
+    const recipient = checkRecipient(recipientRaw);
+    if (!text) throw new Error('Type a message first.');
     if (new TextEncoder().encode(text).length > 240) throw new Error('Message is longer than 240 bytes.');
-    tracking[slot] = { message: text, txHash: null, nonce: null, startedAt: Date.now() };
+    const signer = await signerOn('A');
+    const contract = new ethers.Contract(cfg.chainA.source, cfg.abis.source, signer);
+    tracking[slot] = { message: text, recipient, txHash: null, nonce: null, startedAt: Date.now() };
     renderJourney(); renderDemo();
-    const tx = await contract.sendMessage(cfg.chainB.chainId, text);
+    const tx = await contract.sendMessage(cfg.chainB.chainId, recipient, text);
     tracking[slot].txHash = tx.hash; renderJourney(); renderDemo();
     const r = await tx.wait();
     const ev = r.logs.map(l => { try { return source.interface.parseLog(l); } catch { return null; } }).find(e => e?.name === 'MessageSent');
     tracking[slot].nonce = Number(ev.args.nonce);
     refresh();
     return tracking[slot];
+  }
+  async function acceptMessage(nonce) {
+    const signer = await signerOn('B');
+    const me = await signer.getAddress();
+    const d = st.delivered.get(nonce);
+    if (d && !same(d.recipient, me)) throw new Error(`This message is addressed to ${short(d.recipient, 8, 6)}, but the connected wallet is ${short(me, 8, 6)}. Switch to the recipient's account in MetaMask.`);
+    const g = new ethers.Contract(cfg.chainB.gate, cfg.abis.gate, signer);
+    const tx = await g.accept(nonce);
+    await tx.wait();
+    await refresh();
+    return tx.hash;
   }
 
   /* ---------- journey stages, computed from chain state ---------- */
@@ -204,15 +241,18 @@ function main() {
     const voters = m ? votersOf(m.key) : new Map();
     const d = m ? st.delivered.get(m.nonce) : null;
     const delivered = d && d.key === m.key;
+    const acc = delivered ? st.accepted.get(m.nonce) : null;
     const mode = (done, active) => (done ? 'done' : active ? 'processing' : 'waiting');
     const voterNames = [...voters.keys()].map(vName);
+    const to = t?.recipient || m?.recipient;
     return [
-      { title: 'Source transaction signed', desc: `${cfg.chainA.name} · Your wallet emits a MessageSent event`, label: 'Source tx:', value: t?.txHash || (t ? 'Waiting for wallet confirmation…' : 'Send a message to begin.'), url: t?.txHash && txUrl(cfg.chainA, t.txHash), mode: mode(!!m, !!t && !m) },
+      { title: 'Source transaction signed', desc: `${cfg.chainA.name} · Sender's own wallet emits MessageSent, addressed to ${to ? short(to, 8, 6) : 'the recipient'}`, label: 'Source tx:', value: t?.txHash || (t ? 'Waiting for wallet confirmation…' : 'Send a message to begin.'), url: t?.txHash && txUrl(cfg.chainA, t.txHash), mode: mode(!!m, !!t && !m) },
       { title: 'Source block confirmations', desc: `Validators wait for ${cfg.confirmations} confirmation(s) so the event cannot be reorganised away`, label: m ? `Block #${m.block} · ` : '', value: m ? `${Math.min(conf, cfg.confirmations)} / ${cfg.confirmations} confirmations · nonce #${m.nonce}` : '—', mode: mode(confOk, !!m && !confOk) },
       { title: 'Independent validators verify', desc: 'Each validator re-reads the receipt and block hash through its own RPC provider', label: m ? `${voters.size} of ${N} confirmed:` : '', value: m ? (voterNames.join(', ') || 'Waiting for the first validator…') : '—', mode: mode(voters.size >= T, confOk && voters.size < T) },
       { title: 'Threshold reached on Chain B', desc: `${cfg.chainB.name} · Gate counts on-chain votes, ${T} of ${N} required, no relay`, label: m ? `${voters.size} vote${voters.size === 1 ? '' : 's'} (${T} needed) ·` : '', value: m ? (voters.size ? [...voters.values()].map(v => short(v.txHash, 10, 6)).join(', ') : 'No votes yet') : '—', votes: m?.key, mode: mode(voters.size >= T, confOk && voters.size > 0 && voters.size < T) },
-      { title: 'Delivered and recorded', desc: `${cfg.chainB.name} · Gate emits MessageDelivered with a receipt ID`, label: 'Destination tx:', value: delivered ? d.txHash : '—', url: delivered && txUrl(cfg.chainB, d.txHash), mode: mode(delivered, voters.size >= T && !delivered) },
-    ].map(s => ({ ...s, m, d: delivered ? d : null }));
+      { title: 'Delivered to the recipient', desc: `${cfg.chainB.name} · Gate emits MessageDelivered for ${to ? short(to, 8, 6) : 'the recipient'}`, label: 'Delivery tx:', value: delivered ? d.txHash : '—', url: delivered && txUrl(cfg.chainB, d.txHash), mode: mode(delivered, voters.size >= T && !delivered) },
+      { title: 'Accepted by the recipient', desc: `${cfg.chainB.name} · Recipient signs accept() with their own wallet — nobody else can`, label: acc ? 'Accept tx:' : '', value: acc ? acc.txHash : delivered ? 'Waiting for the recipient — open "My Inbox" on their device' : '—', url: acc && txUrl(cfg.chainB, acc.txHash), mode: mode(!!acc, delivered && !acc) },
+    ].map(s => ({ ...s, m, d: delivered ? d : null, acc }));
   }
 
   function voteBoxes(key) {
@@ -235,8 +275,8 @@ function main() {
 
   // Workspace journey (v1 step layout)
   const stepsWrap = $('journeySteps');
-  for (let i = 0; i < 5; i++) {
-    const s = el('div', undefined, 'journey-step' + (i === 4 ? ' last' : '')); s.id = 'step' + i;
+  for (let i = 0; i < 6; i++) {
+    const s = el('div', undefined, 'journey-step' + (i === 5 ? ' last' : '')); s.id = 'step' + i;
     s.innerHTML = `<div class="step-circle">${i + 1}</div><div class="step-body"><div class="step-top"><strong></strong><span id="stepLabel${i}">Waiting</span></div><p></p><div class="step-proof" id="proof${i}">—</div></div>`;
     stepsWrap.append(s);
   }
@@ -251,17 +291,18 @@ function main() {
       wrap.querySelector('.step-circle').textContent = s.mode === 'done' ? '✓' : i + 1;
       proofNode($('proof' + i), s.label, s.value, s.url, s.votes);
     });
-    const done = stages[4].mode === 'done';
+    const done = stages[4].mode === 'done', accepted = stages[5].mode === 'done';
     const state = $('journeyState');
     state.className = 'journey-state ' + (!t ? 'idle' : done ? 'done' : 'running');
-    state.textContent = !t ? 'Awaiting transaction' : done ? 'Delivery confirmed' : 'Verifying live…';
+    state.textContent = !t ? 'Awaiting transaction' : accepted ? 'Accepted by recipient' : done ? 'Delivered · awaiting recipient' : 'Verifying live…';
+    $('transactionSummary').querySelector('.success-text').textContent = accepted ? '✓ Delivered and accepted' : '✓ Delivered · waiting for recipient';
     $('transactionSummary').hidden = !done;
     if (done) $('summaryAudit').textContent = short(stages[4].d.key, 15, 8);
   }
 
   // Live demo journey (v1 demo layout)
-  const demoTitles = ['Alice signs on Chain A', 'Source confirmations reached', 'Validators verify independently', `${T}-of-${N} votes on Chain B`, 'Destination records delivery'];
-  const demoDescs = ['Source transaction from Alice\'s own wallet', 'Block confirmations before any validator may vote', 'Each validator checks Chain A through its own RPC', 'Votes submitted directly by validators, no relay', 'Gate emits MessageDelivered for Bob\'s application'];
+  const demoTitles = ['Alice signs on Chain A', 'Source confirmations reached', 'Validators verify independently', `${T}-of-${N} votes on Chain B`, 'Delivered to Bob\'s wallet', 'Bob accepts on Chain B'];
+  const demoDescs = ['Source transaction from Alice\'s own wallet, addressed to Bob', 'Block confirmations before any validator may vote', 'Each validator checks Chain A through its own RPC', 'Votes submitted directly by validators, no relay', 'Gate emits MessageDelivered for Bob\'s address', 'Bob signs accept() from his own wallet — only he can'];
   $('demoJourney').innerHTML = demoTitles.map((t, i) => `<div class="demo-stage"><span class="demo-step-number">${i + 1}</span><div><strong>${t}</strong><p>${demoDescs[i]}</p><code id="demoProof${i}">Awaiting transaction</code></div><span class="demo-check" id="demoCheck${i}">Pending</span></div>`).join('');
   let demoMeta = null;
   function renderDemo() {
@@ -272,16 +313,17 @@ function main() {
       $('demoCheck' + i).textContent = !t ? 'Pending' : s.mode === 'done' ? 'Verified' : s.mode === 'processing' ? 'In progress…' : 'Waiting';
       $('demoCheck' + i).className = 'demo-check' + (s.mode === 'done' ? ' verified' : '');
     });
-    const done = stages[4].mode === 'done';
+    const done = stages[4].mode === 'done', accepted = stages[5].mode === 'done';
     $('demoState').className = 'journey-state ' + (!t ? 'idle' : done ? 'done' : 'running');
-    $('demoState').textContent = !t ? 'Ready to send' : done ? 'Delivery confirmed' : 'Verifying live…';
-    if (done && demoMeta && $('demoReceipt').hidden) {
-      const m = stages[0].m, d = stages[4].d, voters = votersOf(m.key);
-      demoMeta.result = { m, d, voters };
-      const rows = [['Reference', demoMeta.reference], ['Record type', demoMeta.type], ['Source chain', `${cfg.chainA.name} · ${cfg.chainA.chainId}`], ['Destination chain', `${cfg.chainB.name} · ${cfg.chainB.chainId}`], ['Source transaction hash', m.txHash], ['Source block', m.block], ['Message nonce', m.nonce], ['Validator approvals', `${voters.size} of ${N} · ${[...voters.keys()].map(vName).join(', ')}`], ...[...voters.entries()].map(([a, v]) => [`Vote tx · ${vName(a)}`, v.txHash]), ['Destination transaction hash', d.txHash], ['Delivery receipt ID', d.key], ['Destination block', d.block]];
+    $('demoState').textContent = !t ? 'Ready to send' : accepted ? 'Accepted by Bob' : done ? 'Delivered · waiting for Bob' : 'Verifying live…';
+    if (done && demoMeta) {
+      const m = stages[0].m, d = stages[4].d, acc = stages[5].acc, voters = votersOf(m.key);
+      demoMeta.result = { m, d, acc, voters };
+      const rows = [['Reference', demoMeta.reference], ['Record type', demoMeta.type], ['Alice (sender) · ' + cfg.chainA.name, m.sender], ['Bob (recipient) · ' + cfg.chainB.name, m.recipient], ['Source transaction hash', m.txHash], ['Source block', m.block], ['Message nonce', m.nonce], ['Validator approvals', `${voters.size} of ${N} · ${[...voters.keys()].map(vName).join(', ')}`], ...[...voters.entries()].map(([a, v]) => [`Vote tx · ${vName(a)}`, v.txHash]), ['Delivery transaction hash', d.txHash], ['Delivery receipt ID', d.key], ['Bob\'s acceptance', acc ? acc.txHash : 'Waiting — Bob opens "My Inbox" and accepts']];
       $('demoReceiptFields').replaceChildren(...rows.map(([k, v]) => { const w = el('div', undefined, 'demo-receipt-field'); w.append(el('span', k)); const c = el('code', String(v ?? '—')); c.title = String(v ?? '—'); w.append(c); return w; }));
-      $('demoReceipt').hidden = false;
-      $('demoReceipt').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      $('demoBanner').textContent = acc ? 'Bob accepted the verified message with his own wallet on Chain B.' : 'Verified message delivered to Bob on Chain B. Waiting for Bob to accept it from his wallet.';
+      document.querySelector('#demoReceipt .demo-ok').textContent = acc ? '✓ DELIVERED & ACCEPTED' : '✓ VERIFIED & DELIVERED';
+      if ($('demoReceipt').hidden) { $('demoReceipt').hidden = false; $('demoReceipt').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     }
   }
 
@@ -294,9 +336,9 @@ function main() {
     const btn = $('sendButton'); btn.disabled = true; btn.textContent = 'Confirm in your wallet…'; $('sendResult').hidden = true;
     $('journey').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     try {
-      const t = await sendMessage('workspace', $('message').value.trim());
+      const t = await sendMessage('workspace', $('message').value.trim(), $('recipient').value);
       $('sendResult').hidden = false; $('sendResult').className = 'notice';
-      $('sendResult').textContent = `Source transaction confirmed (nonce #${t.nonce}). Validators are now verifying it independently — watch the journey below.`;
+      $('sendResult').textContent = `Source transaction confirmed (nonce #${t.nonce}) for ${short(t.recipient, 8, 6)}. Validators are now verifying it independently — watch the journey below. The recipient accepts it in "My Inbox".`;
     } catch (err) {
       tracking.workspace = tracking.workspace?.txHash ? tracking.workspace : null; renderJourney();
       $('journeyState').className = 'journey-state failed'; $('journeyState').textContent = 'Transaction failed';
@@ -314,13 +356,13 @@ function main() {
     $('demoReceipt').hidden = true; $('demoError').hidden = true;
     demoMeta = { reference, type, description };
     const btn = $('demoSend'); btn.disabled = true; btn.textContent = 'Confirm in your wallet…';
-    try { await sendMessage('demo', message); }
+    try { await sendMessage('demo', message, $('demoRecipient').value); }
     catch (err) { tracking.demo = tracking.demo?.txHash ? tracking.demo : null; renderDemo(); $('demoState').className = 'journey-state failed'; $('demoState').textContent = 'Transaction failed'; show('demoError', `Unable to send: ${reasonOf(err)}`, true); }
     finally { btn.disabled = false; btn.textContent = 'Send & verify transaction →'; }
   });
   $('demoCopy').addEventListener('click', async () => {
     const r = demoMeta?.result; if (!r) return;
-    const lines = [`VeriMash v2 verification record`, `Reference: ${demoMeta.reference}`, `Record type: ${demoMeta.type}`, `Sender: Alice (demo) · wallet ${r.m.sender}`, `Intended recipient: Bob (demo)`, `Source: ${cfg.chainA.name} (${cfg.chainA.chainId})`, `Destination: ${cfg.chainB.name} (${cfg.chainB.chainId})`, `Source transaction: ${r.m.txHash}`, `Source block: ${r.m.block}`, `Validator approvals: ${r.voters.size}/${N}`, ...[...r.voters.entries()].map(([a, v]) => `  ${vName(a)}: ${v.txHash}`), `Destination transaction: ${r.d.txHash}`, `Receipt ID: ${r.d.key}`, `Verified-message delivery; not a fund transfer.`];
+    const lines = [`VeriMash v2 verification record`, `Reference: ${demoMeta.reference}`, `Record type: ${demoMeta.type}`, `Alice (sender) wallet on ${cfg.chainA.name}: ${r.m.sender}`, `Bob (recipient) wallet on ${cfg.chainB.name}: ${r.m.recipient}`, `Source: ${cfg.chainA.name} (${cfg.chainA.chainId})`, `Destination: ${cfg.chainB.name} (${cfg.chainB.chainId})`, `Source transaction: ${r.m.txHash}`, `Source block: ${r.m.block}`, `Validator approvals: ${r.voters.size}/${N}`, ...[...r.voters.entries()].map(([a, v]) => `  ${vName(a)}: ${v.txHash}`), `Delivery transaction: ${r.d.txHash}`, `Receipt ID: ${r.d.key}`, `Bob's acceptance: ${r.acc ? r.acc.txHash : 'not yet accepted'}`, `Verified-message delivery between two wallets on two chains; not a fund transfer.`];
     try { await navigator.clipboard.writeText(lines.join('\n')); $('demoCopy').textContent = 'Copied ✓'; } catch { $('demoCopy').textContent = 'Copy unavailable'; }
   });
   $('demoExplorer').addEventListener('click', () => { const r = demoMeta?.result; if (!r) return; $('historySearch').value = r.d.key; searchTerm = r.d.key.toLowerCase(); renderHistory(); location.hash = '#explorer'; });
@@ -330,7 +372,7 @@ function main() {
   $('historySearch').addEventListener('input', e => { searchTerm = e.target.value.trim().toLowerCase(); renderHistory(); });
   function renderHistory() {
     const all = [...st.delivered.values()].sort((a, b) => b.nonce - a.nonce);
-    const visible = all.filter(r => [r.key, r.message, r.txHash, r.sender, st.sent.get(r.nonce)?.txHash].some(v => String(v ?? '').toLowerCase().includes(searchTerm)));
+    const visible = all.filter(r => [r.key, r.message, r.txHash, r.sender, r.recipient, st.sent.get(r.nonce)?.txHash, st.accepted.get(r.nonce)?.txHash].some(v => String(v ?? '').toLowerCase().includes(searchTerm)));
     $('recordCount').textContent = `${visible.length} of ${all.length} records`;
     const tbody = $('receipts'); tbody.replaceChildren();
     if (!visible.length) { const tr = el('tr'); const td = el('td', all.length ? 'No records match your search.' : `No deliveries on ${cfg.chainB.name} yet. Submit a transaction in the workspace.`, 'empty'); td.colSpan = 7; tr.append(td); tbody.append(tr); return; }
@@ -338,10 +380,11 @@ function main() {
       const tr = el('tr');
       const a = el('td'); a.append(el('code', short(item.key), 'mono')); tr.append(a);
       const msg = el('td', item.message, 'table-message'); msg.title = item.message; tr.append(msg);
-      tr.append(el('td', `${cfg.chainA.name} → ${cfg.chainB.name}`));
+      const route = el('td', `${short(item.sender, 6, 4)} → ${short(item.recipient, 6, 4)}`, 'mono'); route.title = `${cfg.chainA.name} ${item.sender} → ${cfg.chainB.name} ${item.recipient}`; tr.append(route);
       tr.append(el('td', short(item.txHash, 10, 6), 'mono'));
       tr.append(el('td', item.block));
-      const stc = el('td'); stc.append(el('span', `Delivered · ${votersOf(item.key).size}/${N}`, 'delivered-chip')); tr.append(stc);
+      const acc = st.accepted.get(item.nonce);
+      const stc = el('td'); stc.append(el('span', acc ? `Accepted ✓ · ${votersOf(item.key).size}/${N}` : `Delivered · awaiting recipient`, acc ? 'accepted-chip' : 'delivered-chip')); tr.append(stc);
       const action = el('td'); const btn = el('button', 'View ↗', 'table-action'); btn.addEventListener('click', () => openDetails(item)); action.append(btn); tr.append(action);
       tbody.append(tr);
     }
@@ -357,11 +400,13 @@ function main() {
     const p = $('detailFields'); p.replaceChildren();
     const src = st.sent.get(record.nonce);
     const voters = votersOf(record.key);
-    field(p, 'Status', `Delivered · ${voters.size} of ${N} validators`);
+    const acc = st.accepted.get(record.nonce);
+    field(p, 'Status', `${acc ? 'Delivered and accepted' : 'Delivered, waiting for the recipient'} · ${voters.size} of ${N} validators`);
     field(p, 'Message', record.message);
     field(p, 'Delivery receipt ID', record.key);
     field(p, 'Message nonce', record.nonce);
-    field(p, 'Sender wallet', record.sender);
+    field(p, `Sender wallet (${cfg.chainA.name})`, record.sender);
+    field(p, `Recipient wallet (${cfg.chainB.name})`, record.recipient);
     if (src && src.key === record.key) {
       field(p, `Source transaction (${cfg.chainA.name})`, src.txHash, txUrl(cfg.chainA, src.txHash));
       field(p, 'Source block', src.block);
@@ -369,12 +414,13 @@ function main() {
     for (const [addr, v] of voters) field(p, `Vote · ${vName(addr)}`, v.txHash, txUrl(cfg.chainB, v.txHash));
     field(p, `Destination delivery tx (${cfg.chainB.name})`, record.txHash, txUrl(cfg.chainB, record.txHash));
     field(p, 'Destination block', record.block);
+    field(p, 'Recipient acceptance', acc ? acc.txHash : 'Not accepted yet', acc && txUrl(cfg.chainB, acc.txHash));
     $('integrityMessage').value = record.message; $('integrityResult').hidden = true;
     $('details').showModal();
   }
   $('integrityButton').addEventListener('click', () => {
     if (!selected) return;
-    const calc = keyFor(selected.nonce, selected.sender, $('integrityMessage').value);
+    const calc = keyFor(selected.nonce, selected.sender, selected.recipient, $('integrityMessage').value);
     const match = calc === selected.key;
     show('integrityResult', `${match ? 'MATCH — this is exactly the message the validators approved.' : 'MISMATCH — this text was never approved; Chain B would reject it.'}\nStored:     ${selected.key}\nCalculated: ${calc}`, !match);
   });
@@ -432,21 +478,21 @@ function main() {
   test('replayButton', 'replayResult', 'Running test…', 'Run replay test ↗', async () => {
     const d = needOne();
     const voter = [...votersOf(d.key).keys()][0];
-    const why = await expectRevert(() => gate.attest.staticCall(d.nonce, d.sender, d.message, { from: voter }));
+    const why = await expectRevert(() => gate.attest.staticCall(d.nonce, d.sender, d.recipient, d.message, { from: voter }));
     return why ? [`Replay REJECTED. ${vName(voter)} re-submitting delivered message #${d.nonce} → "${why}". Delivered count unchanged (${st.delivered.size}).`, false] : ['Replay was NOT rejected.', true];
   });
   test('unauthorizedButton', 'unauthorizedResult', 'Testing…', 'Test unauthorized caller ↗', async () => {
     const outsider = ethers.Wallet.createRandom().address;
-    const why = await expectRevert(() => gate.attest.staticCall(999999n, outsider, 'Send 1000 tokens to attacker', { from: outsider }));
+    const why = await expectRevert(() => gate.attest.staticCall(999999n, outsider, outsider, 'Send 1000 tokens to attacker', { from: outsider }));
     return why ? [`Unauthorized call REJECTED. Outsider ${short(outsider, 8, 6)} (a relayer, hacker or server) → "${why}".`, false] : ['Outsider call was NOT rejected.', true];
   });
   test('validatorButton', 'validatorResult', 'Checking threshold…', 'Test lone validator ↗', async () => {
     const rogue = cfg.validators[0];
     const nonce = BigInt(1_000_000_000 + Math.floor(Math.random() * 1e6));
     const fake = 'FORGED: approve payout to attacker', sender = ethers.Wallet.createRandom().address;
-    const why = await expectRevert(() => gate.attest.staticCall(nonce, sender, fake, { from: rogue.address }));
+    const why = await expectRevert(() => gate.attest.staticCall(nonce, sender, sender, fake, { from: rogue.address }));
     if (why) return [`Unexpected: ${why}`, true];
-    const key = keyFor(nonce, sender, fake);
+    const key = keyFor(nonce, sender, sender, fake);
     const [votes, threshold, delivered] = await Promise.all([gate.votes(key), gate.threshold(), gate.isDelivered(nonce)]);
     return [`Lone validator BLOCKED. ${rogue.name} can cast a vote for a forged message that never happened on ${cfg.chainA.name}, but that is only ${Number(votes) + 1} of ${threshold} votes. The honest validators find no source event, never vote, and the gate never delivers it (delivered = ${delivered}).`, false];
   });
@@ -456,10 +502,80 @@ function main() {
     const src = st.sent.get(d.nonce);
     const evidence = src ? (src.message === tampered ? 'matches' : 'does not match') : 'cannot be found for';
     const voter = cfg.validators[0].address;
-    const why = await expectRevert(() => gate.attest.staticCall(d.nonce, d.sender, tampered, { from: voter }));
+    const why = await expectRevert(() => gate.attest.staticCall(d.nonce, d.sender, d.recipient, tampered, { from: voter }));
     return why
       ? [`Altered message REJECTED. The source event for #${d.nonce} on ${cfg.chainA.name}${src ? ` (block ${src.block})` : ''} ${evidence} the tampered text, so honest validators refuse it — and even a validator pushing it gets "${why}".`, false]
       : ['Tampered message was NOT rejected.', true];
+  });
+
+  test('recipientButton', 'recipientResult', 'Checking…', 'Test stranger accept ↗', async () => {
+    const d = needOne();
+    const stranger = ethers.Wallet.createRandom().address;
+    const whyAccept = await expectRevert(() => gate.accept.staticCall(d.nonce, { from: stranger }));
+    const whyRedirect = await expectRevert(() => gate.attest.staticCall(d.nonce, d.sender, stranger, d.message, { from: cfg.validators[0].address }));
+    return whyAccept && whyRedirect
+      ? [`Stranger REJECTED. ${short(stranger, 8, 6)} tries to accept message #${d.nonce} (addressed to ${short(d.recipient, 8, 6)}) → "${whyAccept}". Re-routing it to the stranger → "${whyRedirect}".`, false]
+      : ['A stranger was NOT rejected.', true];
+  });
+
+  /* ---------- my inbox (the receiving side, Person 2) ---------- */
+  let inboxAddr = null;
+  function renderInbox() {
+    const who = inboxAddr || account;
+    const mineAll = who ? [...st.sent.values()].filter(m => same(m.recipient, who)).sort((a, b) => b.nonce - a.nonce) : [];
+    const waiting = mineAll.filter(m => { const d = st.delivered.get(m.nonce); return d && d.key === m.key && !st.accepted.has(m.nonce); }).length;
+    const badge = $('inboxBadge'); badge.hidden = !waiting; badge.textContent = waiting;
+    $('inboxWho').textContent = who ? `${inboxAddr && !same(inboxAddr, account) ? 'Viewing' : 'Connected'}: ${who}` : 'Connect the receiving wallet';
+    $('inboxBadgeTop').className = 'status-badge ' + (who ? 'online' : 'pending');
+    $('inboxBadgeTop').textContent = !who ? 'No wallet connected' : waiting ? `${waiting} waiting to accept` : `${mineAll.length} message${mineAll.length === 1 ? '' : 's'}`;
+    $('inboxCount').textContent = `${mineAll.length} message${mineAll.length === 1 ? '' : 's'}`;
+    const tb = $('inboxRows'); tb.replaceChildren();
+    if (!mineAll.length) { const tr = el('tr'); const td = el('td', who ? 'No messages addressed to this wallet yet. Ask the sender to put this address in the recipient field.' : 'Connect a wallet to see its messages.', 'empty'); td.colSpan = 6; tr.append(td); tb.append(tr); return; }
+    for (const m of mineAll) {
+      const d = st.delivered.get(m.nonce), delivered = d && d.key === m.key, acc = st.accepted.get(m.nonce);
+      const vs = votersOf(m.key);
+      const tr = el('tr');
+      tr.append(el('td', m.nonce));
+      const msg = el('td', m.message, 'inbox-msg'); tr.append(msg);
+      const from = el('td', short(m.sender, 8, 6), 'mono'); from.title = m.sender; tr.append(from);
+      const v = el('td'); v.append(voteBoxes(m.key)); v.title = `${vs.size} of ${N} validators confirmed (${T} needed)`; tr.append(v);
+      const stc = el('td'); stc.append(el('span', acc ? 'Accepted ✓' : delivered ? 'Delivered · ready' : 'Waiting for validators', acc ? 'accepted-chip' : delivered ? 'delivered-chip' : 'pending-chip')); tr.append(stc);
+      const act = el('td');
+      if (delivered && !acc) {
+        const b = el('button', 'Accept ✓', 'accept-btn'); b.type = 'button';
+        b.disabled = !!inboxAddr && !same(inboxAddr, account);
+        b.addEventListener('click', async () => {
+          b.disabled = true; b.textContent = 'Confirm in wallet…'; $('inboxResult').hidden = true;
+          try { const h = await acceptMessage(m.nonce); $('inboxResult').hidden = false; $('inboxResult').textContent = `Accepted message #${m.nonce} on ${cfg.chainB.name}. Your acceptance tx: ${h}`; }
+          catch (e) { $('inboxResult').hidden = false; $('inboxResult').textContent = `Could not accept: ${reasonOf(e)}`; b.disabled = false; b.textContent = 'Accept ✓'; }
+        });
+        act.append(b);
+      } else if (acc) {
+        const a = el(txUrl(cfg.chainB, acc.txHash) ? 'a' : 'code', short(acc.txHash, 8, 6), 'mono');
+        if (a.tagName === 'A') { a.href = txUrl(cfg.chainB, acc.txHash); a.target = '_blank'; a.rel = 'noopener'; }
+        act.append(a);
+      }
+      tr.append(act);
+      tb.append(tr);
+    }
+  }
+  $('inboxConnect').addEventListener('click', async () => {
+    try { inboxAddr = null; $('inboxLookup').value = ''; await signerOn('B'); }
+    catch (e) { $('inboxResult').hidden = false; $('inboxResult').textContent = reasonOf(e); }
+  });
+  $('inboxLookupBtn').addEventListener('click', () => {
+    const v = $('inboxLookup').value.trim();
+    if (!ethers.isAddress(v)) { $('inboxResult').hidden = false; $('inboxResult').textContent = 'That is not a valid wallet address.'; return; }
+    $('inboxResult').hidden = true; inboxAddr = ethers.getAddress(v); renderInbox();
+  });
+  if (cfg.local && cfg.demoKey && !window.ethereum) $('inboxHint').textContent = 'Local mode: "Connect receiver wallet" uses the built-in demo receiver (Person 2). With MetaMask installed, it uses your MetaMask account instead.';
+
+  /* ---------- recipient fields ---------- */
+  const demoBob = cfg.local && cfg.demoRecipientKey ? new ethers.Wallet(cfg.demoRecipientKey).address : '';
+  $('recipient').value = demoBob; $('demoRecipient').value = demoBob;
+  $('recipient').addEventListener('input', () => { $('recipient').dataset.touched = '1'; });
+  $('recipientMine').addEventListener('click', async () => {
+    try { if (!account) await signerOn('A'); $('recipient').value = account; $('recipient').dataset.touched = '1'; } catch (e) { show('sendResult', reasonOf(e), true); }
   });
 
   /* ---------- go ---------- */

@@ -23,7 +23,7 @@
       <div class="hero-copy">
         <p class="eyebrow"><span class="eyebrow-line"></span> CROSS-CHAIN MESSAGE VERIFICATION</p>
         <h1 id="hero-title">What happens on one chain shouldn't be taken on <em>trust.</em></h1>
-        <p class="hero-intro">You sign a real transaction on Blockchain A from your own wallet. Three independent validators each check it themselves and vote on Blockchain B. The destination contract accepts it only when two of three agree. No relay, no middleman.</p>
+        <p class="hero-intro">Person 1 signs a message on Blockchain A and names Person 2's wallet. Three independent validators each check it themselves and vote on Blockchain B. At two of three it is delivered, and only Person 2 can accept it, with their own wallet. No relay, no middleman.</p>
         <div class="hero-buttons">
           <a class="button-primary" href="app.html#demo">Launch live demo <span aria-hidden="true">&#8599;</span></a>
           <a class="button-text" href="#how">Explore the process <span aria-hidden="true">&#8595;</span></a>
@@ -64,10 +64,10 @@
         <article><span class="process-number">01</span><div class="process-line"></div><h3>Sign on Chain A</h3><p>The user sends a message from their own wallet on Blockchain A. The transaction emits a MessageSent event with the message, the sender and a unique nonce.</p></article>
         <article><span class="process-number">02</span><div class="process-line"></div><h3>Verify independently</h3><p>Each of three validators reads Blockchain A through its own RPC, waits for confirmations, and checks the receipt, block hash and event for itself.</p></article>
         <article><span class="process-number">03</span><div class="process-line"></div><h3>Vote on Chain B</h3><p>Each validator submits its own vote straight to the gate on Blockchain B. A vote is bound to the exact message, sender, nonce and both chains.</p></article>
-        <article><span class="process-number">04</span><div class="process-line"></div><h3>Deliver at 2 of 3</h3><p>When two validators agree, the gate itself delivers the message and emits an auditable receipt. No relay, no admin key, delivered exactly once.</p></article>
+        <article><span class="process-number">04</span><div class="process-line"></div><h3>Deliver, then accept</h3><p>When two validators agree, the gate itself delivers the message to the named recipient, exactly once. Only that recipient can accept it, signing on Blockchain B with their own wallet.</p></article>
       </div>
     </section>
-    <section class="launch-section" id="launch"><div class="section-index">04 / SEE IT IN ACTION</div><h2>Verification is better<br>when you can <em>see it.</em></h2><p>Follow an Alice &#8594; Bob message, watch three independent validators vote, and try the Security Lab against the live contract.</p><a class="button-primary" href="app.html#demo">Launch VeriMash application <span aria-hidden="true">&#8599;</span></a><p class="disclaimer">Real public test-chain execution &middot; Independent validators &middot; No trusted relay &middot; No real token transfers</p></section>
+    <section class="launch-section" id="launch"><div class="section-index">04 / SEE IT IN ACTION</div><h2>Verification is better<br>when you can <em>see it.</em></h2><p>Alice sends from her wallet on one chain, Bob accepts with his on the other. Watch three independent validators vote in between, and try the Security Lab against the live contract.</p><a class="button-primary" href="app.html#demo">Launch VeriMash application <span aria-hidden="true">&#8599;</span></a><p class="disclaimer">Real public test-chain execution &middot; Independent validators &middot; No trusted relay &middot; No real token transfers</p></section>
   </main>
   <footer class="site-footer"><span class="footer-brand">Veri<span>Mash</span>.</span><span>Cross-chain message verification, made inspectable.</span><a href="app.html#overview">Application &#8599;</a></footer>
 </body>

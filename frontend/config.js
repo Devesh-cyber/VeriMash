@@ -1,5 +1,5 @@
 window.VERIMASH = {
-  "createdAt": "2026-11-05T16:46:54.774Z",
+  "createdAt": "2026-11-05T18:32:31.590Z",
   "local": false,
   "threshold": 2,
   "confirmations": 2,
@@ -10,8 +10,8 @@ window.VERIMASH = {
     "explorer": "https://sepolia.etherscan.io",
     "publicRpc": "https://ethereum-sepolia-rpc.publicnode.com",
     "rpc": "https://ethereum-sepolia-rpc.publicnode.com",
-    "source": "0x581fBFaC2d986A2a14F36d20DFb4064DBb7A320d",
-    "deployBlock": 12070757
+    "source": "0xf2a14ddFa5c6b212D95DDd89E68cE365Dc0633b0",
+    "deployBlock": 12071278
   },
   "chainB": {
     "chainId": 31338,
@@ -20,8 +20,8 @@ window.VERIMASH = {
     "explorer": "",
     "publicRpc": "http://127.0.0.1:8546",
     "rpc": "http://127.0.0.1:8546",
-    "gate": "0xdf394dde7C69A26c63dF10427BCD9Fe78B1cC196",
-    "deployBlock": 152
+    "gate": "0x29FbA6c546a0Cc426df153e3BA4FCB2151a53efD",
+    "deployBlock": 3319
   },
   "validators": [
     {
@@ -62,6 +62,12 @@ window.VERIMASH = {
           },
           {
             "indexed": false,
+            "internalType": "address",
+            "name": "recipient",
+            "type": "address"
+          },
+          {
+            "indexed": false,
             "internalType": "string",
             "name": "message",
             "type": "string"
@@ -89,6 +95,11 @@ window.VERIMASH = {
             "internalType": "uint256",
             "name": "destChainId",
             "type": "uint256"
+          },
+          {
+            "internalType": "address",
+            "name": "recipient",
+            "type": "address"
           },
           {
             "internalType": "string",
@@ -184,6 +195,37 @@ window.VERIMASH = {
           {
             "indexed": true,
             "internalType": "address",
+            "name": "recipient",
+            "type": "address"
+          }
+        ],
+        "name": "MessageAccepted",
+        "type": "event"
+      },
+      {
+        "anonymous": false,
+        "inputs": [
+          {
+            "indexed": true,
+            "internalType": "bytes32",
+            "name": "key",
+            "type": "bytes32"
+          },
+          {
+            "indexed": true,
+            "internalType": "uint64",
+            "name": "nonce",
+            "type": "uint64"
+          },
+          {
+            "indexed": true,
+            "internalType": "address",
+            "name": "recipient",
+            "type": "address"
+          },
+          {
+            "indexed": false,
+            "internalType": "address",
             "name": "sender",
             "type": "address"
           },
@@ -209,10 +251,47 @@ window.VERIMASH = {
             "internalType": "uint64",
             "name": "nonce",
             "type": "uint64"
+          }
+        ],
+        "name": "accept",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "uint64",
+            "name": "",
+            "type": "uint64"
+          }
+        ],
+        "name": "accepted",
+        "outputs": [
+          {
+            "internalType": "bool",
+            "name": "",
+            "type": "bool"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "uint64",
+            "name": "nonce",
+            "type": "uint64"
           },
           {
             "internalType": "address",
             "name": "sender",
+            "type": "address"
+          },
+          {
+            "internalType": "address",
+            "name": "recipient",
             "type": "address"
           },
           {
@@ -278,6 +357,11 @@ window.VERIMASH = {
               {
                 "internalType": "address",
                 "name": "sender",
+                "type": "address"
+              },
+              {
+                "internalType": "address",
+                "name": "recipient",
                 "type": "address"
               },
               {
@@ -379,6 +463,11 @@ window.VERIMASH = {
             "type": "address"
           },
           {
+            "internalType": "address",
+            "name": "recipient",
+            "type": "address"
+          },
+          {
             "internalType": "string",
             "name": "message",
             "type": "string"
@@ -390,6 +479,25 @@ window.VERIMASH = {
             "internalType": "bytes32",
             "name": "",
             "type": "bytes32"
+          }
+        ],
+        "stateMutability": "view",
+        "type": "function"
+      },
+      {
+        "inputs": [
+          {
+            "internalType": "uint64",
+            "name": "",
+            "type": "uint64"
+          }
+        ],
+        "name": "recipientOf",
+        "outputs": [
+          {
+            "internalType": "address",
+            "name": "",
+            "type": "address"
           }
         ],
         "stateMutability": "view",

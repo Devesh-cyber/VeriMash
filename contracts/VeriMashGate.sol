@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-/// @title VeriMashGate — lives on Blockchain B (e.g. Polygon Amoy)
-/// @notice Accepts a message from Chain A only after `threshold` of the
-///         independent validators have each attested to the exact same content.
+/// @title VeriMashGate — lives on Blockchain B (e.g. Base Sepolia, or a local chain)
+/// @notice Two people, two chains:
+///           1. The sender signs a message on Chain A, addressed to a recipient wallet.
+///           2. Independent validators each verify Chain A themselves and attest() here.
+///              When `threshold` of them agree on the exact same content, it is DELIVERED.
+///           3. Only the named recipient can accept() it, signing with their own wallet on Chain B.
 ///
-///         There is NO relayer and NO admin:
-///           - every validator submits its own vote from its own key, as its own transaction
-///           - the contract counts the votes itself and delivers when the threshold is reached
-///           - the validator set and threshold are fixed at deployment
-///
-///         A vote is bound to (source chain, source contract, destination chain,
-///         this contract, nonce, sender, message hash). Change one byte and it is a
-///         different message that needs its own threshold of votes.
+///         There is NO relayer and NO admin. The validator set and threshold are fixed at
+///         deployment. A vote is bound to (source chain, source contract, destination chain,
+///         this contract, nonce, sender, recipient, message hash). Change one byte, or the
+///         recipient, and it is a different message that needs its own threshold of votes.
 contract VeriMashGate {
     uint256 public immutable sourceChainId;
     address public immutable sourceContract;
@@ -25,10 +24,13 @@ contract VeriMashGate {
     mapping(bytes32 => mapping(address => bool)) public hasVoted;
     /// @dev nonce => key of the content that was delivered for it (0 = not delivered)
     mapping(uint64 => bytes32) public deliveredKeyForNonce;
+    mapping(uint64 => address) public recipientOf;
+    mapping(uint64 => bool) public accepted;
 
     struct Delivery {
         uint64 nonce;
         address sender;
+        address recipient;
         string message;
         bytes32 key;
         uint64 deliveredAt;
@@ -36,7 +38,8 @@ contract VeriMashGate {
     Delivery[] private _deliveries;
 
     event Attested(bytes32 indexed key, uint64 indexed nonce, address indexed validator, uint256 votes);
-    event MessageDelivered(bytes32 indexed key, uint64 indexed nonce, address indexed sender, string message, uint256 votes);
+    event MessageDelivered(bytes32 indexed key, uint64 indexed nonce, address indexed recipient, address sender, string message, uint256 votes);
+    event MessageAccepted(bytes32 indexed key, uint64 indexed nonce, address indexed recipient);
 
     constructor(uint256 _sourceChainId, address _sourceContract, address[] memory validators_, uint256 _threshold) {
         require(_sourceChainId != block.chainid, "Gate: source must be another chain");
@@ -55,16 +58,16 @@ contract VeriMashGate {
         threshold = _threshold;
     }
 
-    function messageKey(uint64 nonce, address sender, string calldata message) public view returns (bytes32) {
+    function messageKey(uint64 nonce, address sender, address recipient, string calldata message) public view returns (bytes32) {
         return keccak256(
-            abi.encode(sourceChainId, sourceContract, block.chainid, address(this), nonce, sender, keccak256(bytes(message)))
+            abi.encode(sourceChainId, sourceContract, block.chainid, address(this), nonce, sender, recipient, keccak256(bytes(message)))
         );
     }
 
     /// @notice Called by each validator, independently, after it has checked Chain A itself.
-    function attest(uint64 nonce, address sender, string calldata message) external {
+    function attest(uint64 nonce, address sender, address recipient, string calldata message) external {
         require(isValidator[msg.sender], "Gate: not a validator");
-        bytes32 key = messageKey(nonce, sender, message);
+        bytes32 key = messageKey(nonce, sender, recipient, message);
 
         bytes32 done = deliveredKeyForNonce[nonce];
         require(done == bytes32(0) || done == key, "Gate: conflicting message for delivered nonce");
@@ -78,9 +81,20 @@ contract VeriMashGate {
         // Later votes (e.g. the 3rd validator) are still recorded, but never re-deliver.
         if (v == threshold) {
             deliveredKeyForNonce[nonce] = key;
-            _deliveries.push(Delivery(nonce, sender, message, key, uint64(block.timestamp)));
-            emit MessageDelivered(key, nonce, sender, message, v);
+            recipientOf[nonce] = recipient;
+            _deliveries.push(Delivery(nonce, sender, recipient, message, key, uint64(block.timestamp)));
+            emit MessageDelivered(key, nonce, recipient, sender, message, v);
         }
+    }
+
+    /// @notice The recipient confirms receipt on Chain B, from their own wallet.
+    function accept(uint64 nonce) external {
+        bytes32 key = deliveredKeyForNonce[nonce];
+        require(key != bytes32(0), "Gate: message not delivered");
+        require(msg.sender == recipientOf[nonce], "Gate: only the recipient can accept");
+        require(!accepted[nonce], "Gate: already accepted");
+        accepted[nonce] = true;
+        emit MessageAccepted(key, nonce, msg.sender);
     }
 
     function isDelivered(uint64 nonce) external view returns (bool) {

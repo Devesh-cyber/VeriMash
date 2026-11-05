@@ -44,7 +44,7 @@ async function runAttacks({ deployment, attackerKey, rogueKey, print = true } = 
   await expectRevert(
     "Outsider cannot deliver",
     "a non-validator wallet calls attest() with a fake message",
-    () => asAttacker.attest.staticCall(1n, asAttacker.runner.address, "Send 1000 tokens to attacker"),
+    () => asAttacker.attest.staticCall(1n, asAttacker.runner.address, asAttacker.runner.address, "Send 1000 tokens to attacker"),
     "not a validator"
   );
 
@@ -52,8 +52,8 @@ async function runAttacks({ deployment, attackerKey, rogueKey, print = true } = 
   const fakeNonce = BigInt(1_000_000_000 + Math.floor(Math.random() * 1e6));
   const fakeMsg = "FORGED: approve payout to attacker";
   const fakeSender = ethers.Wallet.createRandom().address;
-  const key = await asRogue.messageKey(fakeNonce, fakeSender, fakeMsg);
-  const tx = await asRogue.attest(fakeNonce, fakeSender, fakeMsg, await feeOverrides(provider));
+  const key = await asRogue.messageKey(fakeNonce, fakeSender, fakeSender, fakeMsg);
+  const tx = await asRogue.attest(fakeNonce, fakeSender, fakeSender, fakeMsg, await feeOverrides(provider));
   await tx.wait();
   const votes = await asRogue.votes(key);
   const delivered = await asRogue.isDelivered(fakeNonce);
@@ -65,7 +65,7 @@ async function runAttacks({ deployment, attackerKey, rogueKey, print = true } = 
   await expectRevert(
     "Double-voting blocked",
     "the corrupt validator votes again for its forged message",
-    () => asRogue.attest.staticCall(fakeNonce, fakeSender, fakeMsg),
+    () => asRogue.attest.staticCall(fakeNonce, fakeSender, fakeSender, fakeMsg),
     "already attested"
   );
 
@@ -76,16 +76,30 @@ async function runAttacks({ deployment, attackerKey, rogueKey, print = true } = 
     await expectRevert(
       "Tampered content blocked",
       `change delivered message #${d.nonce} "${d.message}" by one character`,
-      () => asRogue.attest.staticCall(d.nonce, d.sender, d.message + "!"),
+      () => asRogue.attest.staticCall(d.nonce, d.sender, d.recipient, d.message + "!"),
       "conflicting message"
     );
     // 5. Replay a delivered message
     const voted = await asRogue.hasVoted(d.key, asRogue.runner.address);
     if (voted) {
-      await expectRevert("Replay blocked", `re-submit delivered message #${d.nonce} again`, () => asRogue.attest.staticCall(d.nonce, d.sender, d.message), "already attested");
+      await expectRevert("Replay blocked", `re-submit delivered message #${d.nonce} again`, () => asRogue.attest.staticCall(d.nonce, d.sender, d.recipient, d.message), "already attested");
     } else {
       out(`${G.y}• Replay test skipped: this validator never voted on #${d.nonce}${G.r}`);
     }
+    // 6. Redirect: same message, but a different recipient (the attacker)
+    await expectRevert(
+      "Redirect to another recipient blocked",
+      `re-route delivered message #${d.nonce} to the attacker's wallet`,
+      () => asRogue.attest.staticCall(d.nonce, d.sender, asAttacker.runner.address, d.message),
+      "conflicting message"
+    );
+    // 7. Someone other than the recipient tries to accept
+    await expectRevert(
+      "Only the recipient can accept",
+      `attacker calls accept(#${d.nonce}) for a message addressed to ${d.recipient.slice(0, 10)}…`,
+      () => asAttacker.accept.staticCall(d.nonce),
+      "only the recipient"
+    );
   } else {
     out(`${G.y}• Tamper and replay tests need one delivered message first — send one, then run again.${G.r}`);
   }

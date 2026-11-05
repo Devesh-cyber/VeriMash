@@ -22,3 +22,17 @@ td.vote-no{color:#c3ced8}
 .detail-row a.detail-value{color:#126b67;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
 #sendResult.notice{display:block}
 @media (max-width:760px){.top-actions .top-network,.top-actions .env-chip{display:none}.validator-stats b{font-size:14px}}
+.recipient-row{display:flex;gap:10px;align-items:center;margin:4px 0 16px}
+.recipient-row .search-field{flex:1;min-width:0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;margin:0}
+.recipient-row .outlined{white-space:nowrap}
+.nav-badge{margin-left:auto;font-style:normal;background:#e0a500;color:#102032;font-size:10px;font-weight:800;border-radius:20px;padding:2px 7px}
+.accepted-chip{font-size:11px;font-weight:750;border-radius:40px;padding:5px 10px;background:#dff4ea;color:#11704f}
+.accept-btn{border:0;background:#126b67;color:#fff;font-size:12px;font-weight:750;border-radius:8px;padding:8px 12px}
+.accept-btn:disabled{background:#9db4b2}
+.inbox-msg{white-space:normal;max-width:420px}
+#view-inbox .panel{margin-bottom:22px}
+@media (max-width:760px){.recipient-row{flex-direction:column;align-items:stretch}}
+#view-inbox .panel-title{flex-wrap:wrap;gap:14px}
+#inboxWho{word-break:break-all;font-size:17px}
+#inboxRows td{vertical-align:middle}
+@media (max-width:760px){#view-inbox th:nth-child(3),#view-inbox td:nth-child(3),#view-inbox th:nth-child(1),#view-inbox td:nth-child(1){display:none}#view-inbox .inbox-msg{min-width:130px}#inboxConnect{width:100%}}
