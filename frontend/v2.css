@@ -1,0 +1,24 @@
+/* VeriMash v2 additions, styled to match the v1 dashboard. */
+.wallet-button{border:1px solid #126b67;background:#126b67;color:#fff;font-size:12px;font-weight:750;border-radius:50px;padding:9px 15px}
+.wallet-button.connected{background:#f8fdfb;color:#217664;border-color:#dce9e4;font-family:ui-monospace,Menlo,Consolas,monospace}
+.vote-boxes{display:inline-flex;gap:4px;margin-right:8px;vertical-align:middle}
+.vote-boxes i{width:11px;height:11px;border-radius:3px;background:#dde5ec}
+.vote-boxes i.yes{background:#16a37b}
+.step-proof a.mono{color:#126b67;font-weight:650}
+.validator-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-bottom:22px}
+.validator-card{display:flex;flex-direction:column;gap:14px}
+.validator-top{display:flex;align-items:center;gap:12px}
+.validator-top strong{display:block;font-size:15px}
+.validator-top small{display:block;font-size:11px;color:#718296;word-break:break-all}
+.validator-badge{background:#102032;color:#fff;font-size:12px}
+.validator-card .status-badge{align-self:flex-start}
+.status-badge.idle{background:#eff3f7;color:#65758b}
+.validator-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;border-top:1px solid #edf1f5;padding-top:12px}
+.validator-stats small{display:block;font-size:9px;letter-spacing:1.2px;color:#8291a1;font-weight:800}
+.validator-stats b{font-size:16px}
+td.vote-yes{color:#16a37b;font-weight:900}
+td.vote-no{color:#c3ced8}
+.pending-chip{font-size:11px;font-weight:750;border-radius:40px;padding:5px 10px;background:#fff6e0;color:#9a6a00}
+.detail-row a.detail-value{color:#126b67;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;word-break:break-all}
+#sendResult.notice{display:block}
+@media (max-width:760px){.top-actions .top-network,.top-actions .env-chip{display:none}.validator-stats b{font-size:14px}}

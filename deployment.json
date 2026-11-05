@@ -1,0 +1,40 @@
+{
+  "createdAt": "2026-11-05T16:46:54.774Z",
+  "local": false,
+  "threshold": 2,
+  "confirmations": 2,
+  "chainA": {
+    "chainId": 11155111,
+    "name": "Ethereum Sepolia",
+    "currency": "ETH",
+    "explorer": "https://sepolia.etherscan.io",
+    "publicRpc": "https://ethereum-sepolia-rpc.publicnode.com",
+    "rpc": "https://ethereum-sepolia-rpc.publicnode.com",
+    "source": "0x581fBFaC2d986A2a14F36d20DFb4064DBb7A320d",
+    "deployBlock": 12070757
+  },
+  "chainB": {
+    "chainId": 31338,
+    "name": "Local Chain B",
+    "currency": "ETH",
+    "explorer": "",
+    "publicRpc": "http://127.0.0.1:8546",
+    "rpc": "http://127.0.0.1:8546",
+    "gate": "0xdf394dde7C69A26c63dF10427BCD9Fe78B1cC196",
+    "deployBlock": 152
+  },
+  "validators": [
+    {
+      "address": "0xd48Cb31421E4bEA049248eB78D4182c018fb6F5A",
+      "name": "Devesh's laptop"
+    },
+    {
+      "address": "0xadeF8b3201e1d661e2C34CFfA1a70A23918457bB",
+      "name": "Zeenat's laptop"
+    },
+    {
+      "address": "0x45686f131a84Cc15D9e52cac51b39187c8428179",
+      "name": "Shivam's laptop"
+    }
+  ]
+}

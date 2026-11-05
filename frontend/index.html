@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="description" content="VeriMash verifies cross-chain messages between two independent public EVM test chains: the user signs on Chain A, three independent validators vote on Chain B, and the destination contract enforces a two-of-three threshold. No trusted relay.">
+  <title>VeriMash &mdash; Verify Across Chains</title>
+  <link rel="stylesheet" href="landing.css">
+  <script defer src="landing.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a href="#top" class="wordmark" aria-label="VeriMash home">Veri<span>Mash</span><span class="wordmark-dot">.</span></a>
+    <nav class="primary-nav" aria-label="Main navigation">
+      <a href="#problem">The problem</a><a href="#approach">Our approach</a><a href="#how">How it works</a>
+    </nav>
+    <a class="nav-launch" href="app.html#overview">Open application <span aria-hidden="true">&#8599;</span></a>
+  </header>
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="eyebrow-line"></span> CROSS-CHAIN MESSAGE VERIFICATION</p>
+        <h1 id="hero-title">What happens on one chain shouldn't be taken on <em>trust.</em></h1>
+        <p class="hero-intro">You sign a real transaction on Blockchain A from your own wallet. Three independent validators each check it themselves and vote on Blockchain B. The destination contract accepts it only when two of three agree. No relay, no middleman.</p>
+        <div class="hero-buttons">
+          <a class="button-primary" href="app.html#demo">Launch live demo <span aria-hidden="true">&#8599;</span></a>
+          <a class="button-text" href="#how">Explore the process <span aria-hidden="true">&#8595;</span></a>
+        </div>
+        <div class="hero-meta"><span class="meta-line"></span> TWO PUBLIC TEST CHAINS <span class="meta-sep">/</span> THREE INDEPENDENT VALIDATORS</div>
+      </div>
+      <div class="hero-visual" aria-label="Illustration of a message traveling from Blockchain A through verification to Blockchain B">
+        <video class="hero-video" id="heroVideo" autoplay muted loop playsinline preload="metadata" poster="assets/verimash-poster.jpg" aria-hidden="true">
+          <source src="assets/verimash-flow.webm" type="video/webm">
+          <source src="assets/verimash-flow.mp4" type="video/mp4">
+        </video>
+        <div class="diagram-fallback" id="diagramFallback" aria-hidden="true">
+          <div class="diagram-node"><div class="diagram-stack"><i></i><i></i><i></i></div><span>BLOCKCHAIN A</span></div>
+          <div class="diagram-connector"><div class="moving-dot"></div></div>
+          <div class="diagram-node verify"><div class="verification-disc"><div class="verification-core"></div></div><span>VERIFICATION</span><small>2 OF 3 INDEPENDENT VOTES</small></div>
+          <div class="diagram-connector"><div class="moving-dot delay"></div></div>
+          <div class="diagram-node"><div class="diagram-stack"><i></i><i></i><i></i></div><span>BLOCKCHAIN B</span></div>
+        </div>
+        <div class="visual-caption">A <span>&#8594;</span> INDEPENDENT VALIDATORS <span>&#8594;</span> ON-CHAIN VOTES <span>&#8594;</span> B</div>
+      </div>
+      <a class="scroll-cue" href="#problem">SCROLL TO EXPLORE <span aria-hidden="true">&#8595;</span></a>
+    </section>
+    <section class="section problem" id="problem">
+      <div class="section-index">01 / THE PROBLEM</div>
+      <div class="section-body"><h2>Two blockchains.<br><span>No shared record of truth.</span></h2><div class="section-side"><p>Blockchains maintain their own transaction histories. When an application on Blockchain B receives a message claiming that something happened on Blockchain A, it cannot simply look inside Chain A and confirm that claim.</p><p>Accepting an unchecked message can create serious problems: an attacker might replay a message that was already delivered, change its contents, impersonate an authorized sender, or bypass the approvals required by the destination application.</p><p class="section-fine">The real challenge is not moving data between networks. It is giving the receiving application enough trustworthy evidence to decide whether that data should be accepted.</p></div></div>
+      <div class="line-facts"><div><strong>01</strong><span>Was the source event real?</span></div><div><strong>02</strong><span>Who approved the message?</span></div><div><strong>03</strong><span>Can the destination safely accept it?</span></div></div>
+    </section>
+    <section class="section approach" id="approach">
+      <div class="section-index">02 / OUR APPROACH</div>
+      <div class="section-body"><h2>Don't just deliver.<br><span>Verify before accepting.</span></h2><div class="section-side"><p>VeriMash v2 removes the middleman. The user signs the source transaction on Blockchain A in their own wallet. Three validators, each on a separate machine with its own private key and its own RPC provider, wait for block confirmations and independently check the receipt, block hash and event.</p><p>Each validator then submits its own vote directly to Blockchain B. There is no relay to trust: the destination contract counts the votes itself and delivers the message only when two of three agree on exactly the same content. Forged, altered and replayed messages are rejected on-chain.</p><p class="section-fine">Every delivery can be inspected in the Transaction Explorer, from the source transaction through each validator vote. VeriMash is a prototype on public test networks: validators are honest-majority, and it does not transfer real cryptocurrency.</p><a class="inline-link" href="app.html#workspace">Explore the transaction workspace <span aria-hidden="true">&#8599;</span></a></div></div>
+      <div class="feature-rule"><span>USER-SIGNED SOURCE</span><span>2 / 3 INDEPENDENT VOTES</span><span>ON-CHAIN ENFORCEMENT</span></div>
+    </section>
+    <section class="section process" id="how">
+      <div class="section-index">03 / HOW IT WORKS</div>
+      <h2>From event to evidence.</h2>
+      <p class="process-lead">Follow one message from its original on-chain event to an auditable destination result. Each completed stage in the live demo corresponds to actual test-chain transaction evidence; the displayed proof is not a fabricated animation.</p>
+      <div class="process-grid">
+        <article><span class="process-number">01</span><div class="process-line"></div><h3>Sign on Chain A</h3><p>The user sends a message from their own wallet on Blockchain A. The transaction emits a MessageSent event with the message, the sender and a unique nonce.</p></article>
+        <article><span class="process-number">02</span><div class="process-line"></div><h3>Verify independently</h3><p>Each of three validators reads Blockchain A through its own RPC, waits for confirmations, and checks the receipt, block hash and event for itself.</p></article>
+        <article><span class="process-number">03</span><div class="process-line"></div><h3>Vote on Chain B</h3><p>Each validator submits its own vote straight to the gate on Blockchain B. A vote is bound to the exact message, sender, nonce and both chains.</p></article>
+        <article><span class="process-number">04</span><div class="process-line"></div><h3>Deliver at 2 of 3</h3><p>When two validators agree, the gate itself delivers the message and emits an auditable receipt. No relay, no admin key, delivered exactly once.</p></article>
+      </div>
+    </section>
+    <section class="launch-section" id="launch"><div class="section-index">04 / SEE IT IN ACTION</div><h2>Verification is better<br>when you can <em>see it.</em></h2><p>Follow an Alice &#8594; Bob message, watch three independent validators vote, and try the Security Lab against the live contract.</p><a class="button-primary" href="app.html#demo">Launch VeriMash application <span aria-hidden="true">&#8599;</span></a><p class="disclaimer">Real public test-chain execution &middot; Independent validators &middot; No trusted relay &middot; No real token transfers</p></section>
+  </main>
+  <footer class="site-footer"><span class="footer-brand">Veri<span>Mash</span>.</span><span>Cross-chain message verification, made inspectable.</span><a href="app.html#overview">Application &#8599;</a></footer>
+</body>
+</html>

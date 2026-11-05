@@ -1,0 +1,7 @@
+node_modules/
+artifacts/
+hardhat/cache-*/
+hardhat/artifacts-*/
+.env
+*.env
+!*.env.example
