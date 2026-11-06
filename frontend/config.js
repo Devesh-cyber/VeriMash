@@ -1,44 +1,46 @@
 window.VERIMASH = {
-  "createdAt": "2026-11-06T04:38:55.728Z",
-  "local": false,
+  "createdAt": "2026-11-06T06:22:47.125Z",
+  "local": true,
   "threshold": 2,
   "confirmations": 2,
   "chainA": {
-    "chainId": 11155111,
-    "name": "Ethereum Sepolia",
+    "chainId": 31337,
+    "name": "Local Chain A",
     "currency": "ETH",
-    "explorer": "https://sepolia.etherscan.io",
-    "publicRpc": "https://ethereum-sepolia-rpc.publicnode.com",
-    "rpc": "https://eth-sepolia.g.alchemy.com/v2/alch_H-KwjZoVrui4A2bp5N6YN",
-    "source": "0xFfb9E2AE8Cc3C42b791aF03F1881153b104bbca5",
-    "deployBlock": 12074256,
-    "walletRpc": "https://ethereum-sepolia-rpc.publicnode.com"
+    "explorer": "",
+    "publicRpc": "http://127.0.0.1:8545",
+    "rpc": "http://127.0.0.1:8545",
+    "walletRpc": "http://127.0.0.1:8545",
+    "source": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "deployBlock": 1
   },
   "chainB": {
-    "chainId": 84532,
-    "name": "Base Sepolia",
+    "chainId": 31338,
+    "name": "Local Chain B",
     "currency": "ETH",
-    "explorer": "https://sepolia.basescan.org",
-    "publicRpc": "https://sepolia.base.org",
-    "rpc": "https://base-sepolia.g.alchemy.com/v2/alch_H-KwjZoVrui4A2bp5N6YN",
-    "gate": "0x29FbA6c546a0Cc426df153e3BA4FCB2151a53efD",
-    "deployBlock": 55090334,
-    "walletRpc": "https://sepolia.base.org"
+    "explorer": "",
+    "publicRpc": "http://127.0.0.1:8546",
+    "rpc": "http://127.0.0.1:8546",
+    "walletRpc": "http://127.0.0.1:8546",
+    "gate": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "deployBlock": 3
   },
   "validators": [
     {
-      "address": "0xd48Cb31421E4bEA049248eB78D4182c018fb6F5A",
-      "name": "Devesh's laptop"
+      "address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "name": "Validator 1"
     },
     {
-      "address": "0xadeF8b3201e1d661e2C34CFfA1a70A23918457bB",
-      "name": "Zeenat's laptop"
+      "address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+      "name": "Validator 2"
     },
     {
-      "address": "0x45686f131a84Cc15D9e52cac51b39187c8428179",
-      "name": "Shivam's laptop"
+      "address": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+      "name": "Validator 3"
     }
   ],
+  "demoKey": "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a",
+  "demoRecipientKey": "0x92db14e403b83dfe3df233f83dfa3a0d7096f21ca9b0d6d6b8d88b2b4ec1564e",
   "abis": {
     "source": [
       {
