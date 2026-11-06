@@ -1,42 +1,42 @@
 {
-  "createdAt": "2026-11-06T06:22:47.125Z",
-  "local": true,
+  "createdAt": "2026-11-06T10:25:02.342Z",
+  "local": false,
   "threshold": 2,
   "confirmations": 2,
   "chainA": {
-    "chainId": 31337,
-    "name": "Local Chain A",
+    "chainId": 11155111,
+    "name": "Ethereum Sepolia",
     "currency": "ETH",
-    "explorer": "",
-    "publicRpc": "http://127.0.0.1:8545",
-    "rpc": "http://127.0.0.1:8545",
-    "walletRpc": "http://127.0.0.1:8545",
-    "source": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-    "deployBlock": 1
+    "explorer": "https://sepolia.etherscan.io",
+    "publicRpc": "https://ethereum-sepolia-rpc.publicnode.com",
+    "rpc": "https://eth-sepolia.g.alchemy.com/v2/alch_H-KwjZoVrui4A2bp5N6YN",
+    "walletRpc": "https://ethereum-sepolia-rpc.publicnode.com",
+    "source": "0x3fbD092D6bbF071C5567673c43A3EFcd7C294e1A",
+    "deployBlock": 12075959
   },
   "chainB": {
-    "chainId": 31338,
-    "name": "Local Chain B",
+    "chainId": 84532,
+    "name": "Base Sepolia",
     "currency": "ETH",
-    "explorer": "",
-    "publicRpc": "http://127.0.0.1:8546",
-    "rpc": "http://127.0.0.1:8546",
-    "walletRpc": "http://127.0.0.1:8546",
-    "gate": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-    "deployBlock": 3
+    "explorer": "https://sepolia.basescan.org",
+    "publicRpc": "https://sepolia.base.org",
+    "rpc": "https://base-sepolia.g.alchemy.com/v2/alch_H-KwjZoVrui4A2bp5N6YN",
+    "walletRpc": "https://sepolia.base.org",
+    "gate": "0x824a9c17Cd7a59415e06a0aD1aB2bc51D2762c15",
+    "deployBlock": 55194144
   },
   "validators": [
     {
-      "address": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-      "name": "Validator 1"
+      "address": "0xd48Cb31421E4bEA049248eB78D4182c018fb6F5A",
+      "name": "Devesh's laptop"
     },
     {
-      "address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
-      "name": "Validator 2"
+      "address": "0xadeF8b3201e1d661e2C34CFfA1a70A23918457bB",
+      "name": "Zeenat's laptop"
     },
     {
-      "address": "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
-      "name": "Validator 3"
+      "address": "0x45686f131a84Cc15D9e52cac51b39187c8428179",
+      "name": "Shivam's laptop"
     }
   ]
 }
