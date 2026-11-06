@@ -12,7 +12,8 @@
     "attack": "node scripts/attack.js",
     "keygen": "node scripts/keygen.js",
     "serve": "node scripts/serve.js",
-    "fund": "node scripts/fund-local.js"
+    "fund": "node scripts/fund-local.js",
+    "set-rpc": "node scripts/set-rpc.js"
   },
   "author": "",
   "license": "ISC",

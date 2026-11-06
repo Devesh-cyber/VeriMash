@@ -9,9 +9,10 @@ window.VERIMASH = {
     "currency": "ETH",
     "explorer": "https://sepolia.etherscan.io",
     "publicRpc": "https://ethereum-sepolia-rpc.publicnode.com",
-    "rpc": "https://ethereum-sepolia-rpc.publicnode.com",
+    "rpc": "https://eth-sepolia.g.alchemy.com/v2/alch_H-KwjZoVrui4A2bp5N6YN",
     "source": "0xFfb9E2AE8Cc3C42b791aF03F1881153b104bbca5",
-    "deployBlock": 12074256
+    "deployBlock": 12074256,
+    "walletRpc": "https://ethereum-sepolia-rpc.publicnode.com"
   },
   "chainB": {
     "chainId": 84532,
@@ -19,9 +20,10 @@ window.VERIMASH = {
     "currency": "ETH",
     "explorer": "https://sepolia.basescan.org",
     "publicRpc": "https://sepolia.base.org",
-    "rpc": "https://sepolia.base.org",
+    "rpc": "https://base-sepolia.g.alchemy.com/v2/alch_H-KwjZoVrui4A2bp5N6YN",
     "gate": "0x29FbA6c546a0Cc426df153e3BA4FCB2151a53efD",
-    "deployBlock": 55090334
+    "deployBlock": 55090334,
+    "walletRpc": "https://sepolia.base.org"
   },
   "validators": [
     {

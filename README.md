@@ -177,6 +177,22 @@ For a public link, **both chains must be public** (e.g. Sepolia → Base Sepolia
 
 **Who keeps the validators running?** For the live presentation: three teammates' laptops (best visual: close a lid on stage). If judges will try the link on their own later, run the three validators on any always-on machine instead (e.g. three free cloud instances, or one teammate's PC left on), each still with its own key and RPC.
 
+### Website RPC (important: avoids "waiting for RPC" / "RPC busy")
+
+The free public RPCs get busy. Point the website at your own Alchemy links — no redeploy needed:
+
+```bash
+# in .env (one Alchemy key works for both chains)
+BROWSER_RPC_A=https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY
+BROWSER_RPC_B=https://base-sepolia.g.alchemy.com/v2/YOUR_KEY
+```
+```bash
+npm run set-rpc
+git add frontend/config.js && git commit -m "Website uses Alchemy RPC" && git push
+```
+
+The app reads history from the contracts' stored state and only scans the newest few blocks, so it works within Alchemy's free 10-block log limit. MetaMask itself keeps using the public RPCs. The key is visible in the website's code (any frontend key is); it's test-network only. If you want, create a separate Alchemy app just for the website.
+
 ### Step 6: demo script (2 minutes)
 
 1. **Phone 1** opens the Vercel link **inside the MetaMask app browser**, opens the **Live Transaction Demo**, pastes **Bob's wallet address** (phone 2), and sends "Invoice INV-2048 paid by Alice".

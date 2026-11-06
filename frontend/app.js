@@ -70,77 +70,116 @@ function main() {
   $('envName').textContent = cfg.local ? 'Local development chains' : 'Public test networks';
   $('envDetail').innerHTML = `${cfg.chainA.name} → ${cfg.chainB.name}<br/>No relay · ${T}-of-${N} independent validators`;
 
-  /* ---------- chain state, read incrementally ---------- */
-  let CHUNK = cfg.logChunk || 2000;
+  /* ---------- chain state ----------
+   * History comes from the contracts' STORED STATE, read with cheap eth_calls (no block ranges):
+   *   Chain B gate:   deliveryCount() / getDelivery(i), hasVoted(key, validator), accepted(nonce)
+   *   Chain A source: nonce() = how many messages were ever sent
+   * Only the newest few blocks are scanned for events, to show live transaction hashes.
+   * This keeps working on free RPC plans that allow only 10 blocks per log query
+   * (Base makes a block every 2 seconds, so scanning all history that way can't keep up). */
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
   const st = {
-    headA: 0, headB: 0, nextA: cfg.chainA.deployBlock, nextB: cfg.chainB.deployBlock,
-    sent: new Map(),      // nonce -> {nonce, sender, recipient, message, txHash, block, key}
-    votes: new Map(),     // key -> Map(validatorLower -> {txHash, block})
-    delivered: new Map(), // nonce -> {nonce, key, txHash, block, message, sender, recipient}
-    accepted: new Map(),  // nonce -> {txHash, block, recipient}
+    headA: 0, headB: 0, nextA: null, nextB: null, sentTotal: 0, dCount: 0,
+    sent: new Map(),      // nonce -> {nonce, sender, recipient, message, txHash|null, block|null, key}
+    votes: new Map(),     // key -> Map(validatorLower -> {txHash|null, block|null, nonce})
+    delivered: new Map(), // nonce -> {nonce, key, txHash|null, block|null, message, sender, recipient, deliveredAt}
+    accepted: new Map(),  // nonce -> {txHash|null, block|null, recipient}
     voteCount: 0,
   };
   const votersOf = key => st.votes.get(key) || new Map();
+  function addVote(key, validator, info) {
+    if (!st.votes.has(key)) st.votes.set(key, new Map());
+    const m = st.votes.get(key), v = validator.toLowerCase(), old = m.get(v);
+    if (!old) st.voteCount++;
+    m.set(v, { ...old, ...Object.fromEntries(Object.entries(info).filter(([, x]) => x != null)) });
+  }
+  function upsert(map, k, info) { const old = map.get(k) || {}; map.set(k, { ...old, ...Object.fromEntries(Object.entries(info).filter(([, x]) => x != null)) }); }
 
-  // Public RPCs are load-balanced: one server can be a block or two behind another.
-  // So we read logs a few blocks behind the tip, and treat "beyond head" errors as "try again next tick".
-  const LAG = cfg.local ? 0 : 3;
-  const RETRY_LATER = Symbol('retry');
-  async function logs(contract, filter, from, to) {
-    try { return await contract.queryFilter(filter, from, to); }
-    catch (e) {
-      const msg = String(e?.error?.message || e?.info?.error?.message || e?.shortMessage || e?.message || '');
-      if (/beyond current head|head block|header not found|unknown block|block not found|after last accepted/i.test(msg)) return RETRY_LATER;
-      if (CHUNK > 10) { CHUNK = Math.max(10, Math.floor(CHUNK / 4)); return null; } // RPC range limit: shrink and retry
-      throw e;
+  const LAG = cfg.local ? 0 : 2;                 // stay a couple of blocks behind the tip (load-balanced RPCs)
+  let CHUNK = cfg.local ? 2000 : 10;             // free RPC plans: 10 blocks per log query
+  const RECENT = { A: cfg.local ? 1e9 : 100, B: cfg.local ? 1e9 : 150 }; // tip window: ~20 min of Sepolia, ~5 min of Base
+  const MAX_VOTE_CHECK = 40;                     // check per-validator votes for the newest 40 deliveries
+
+  function onEvent(which, ev, l) {
+    if (which === 'A' && ev.name === 'MessageSent') {
+      if (Number(ev.args.destChainId) !== cfg.chainB.chainId) return;
+      const n = Number(ev.args.nonce);
+      upsert(st.sent, n, { nonce: n, sender: ev.args.sender, recipient: ev.args.recipient, message: ev.args.message, txHash: l.transactionHash, block: l.blockNumber, key: keyFor(ev.args.nonce, ev.args.sender, ev.args.recipient, ev.args.message) });
+    } else if (ev.name === 'Attested') {
+      addVote(ev.args.key, ev.args.validator, { txHash: l.transactionHash, block: l.blockNumber, nonce: Number(ev.args.nonce) });
+    } else if (ev.name === 'MessageDelivered') {
+      const n = Number(ev.args.nonce);
+      upsert(st.delivered, n, { nonce: n, key: ev.args.key, txHash: l.transactionHash, block: l.blockNumber, message: ev.args.message, sender: ev.args.sender, recipient: ev.args.recipient });
+    } else if (ev.name === 'MessageAccepted') {
+      upsert(st.accepted, Number(ev.args.nonce), { txHash: l.transactionHash, block: l.blockNumber, recipient: ev.args.recipient });
     }
   }
-  async function scanA() {
-    st.headA = await pA.getBlockNumber();
-    const target = st.headA - LAG;
-    while (st.nextA <= target) {
-      const to = Math.min(target, st.nextA + CHUNK - 1);
-      const evs = await logs(source, source.filters.MessageSent(), st.nextA, to);
-      if (evs === RETRY_LATER) break;
-      if (!evs) continue;
-      for (const ev of evs) {
-        if (Number(ev.args.destChainId) !== cfg.chainB.chainId) continue;
-        const n = Number(ev.args.nonce);
-        st.sent.set(n, { nonce: n, sender: ev.args.sender, recipient: ev.args.recipient, message: ev.args.message, txHash: ev.transactionHash, block: ev.blockNumber, key: keyFor(ev.args.nonce, ev.args.sender, ev.args.recipient, ev.args.message) });
+  async function scanTip(which) {
+    const p = which === 'A' ? pA : pB, c = which === 'A' ? source : gate, chain = which === 'A' ? cfg.chainA : cfg.chainB;
+    const target = (which === 'A' ? st.headA : st.headB) - LAG;
+    let next = which === 'A' ? st.nextA : st.nextB;
+    if (next == null || target - next > RECENT[which]) next = Math.max(chain.deployBlock, target - RECENT[which] + 1);
+    while (next <= target) {
+      const to = Math.min(target, next + CHUNK - 1);
+      let lg;
+      try { lg = await p.getLogs({ address: await c.getAddress(), fromBlock: next, toBlock: to }); }
+      catch (e) {
+        const msg = String(e?.error?.message || e?.info?.error?.message || e?.shortMessage || e?.message || '');
+        if (/beyond current head|head block|header not found|unknown block|block not found|after last accepted/i.test(msg)) break;
+        if (CHUNK > 10) { CHUNK = Math.max(10, Math.floor(CHUNK / 4)); continue; }
+        throw e;
       }
-      st.nextA = to + 1;
+      for (const l of lg) { let ev = null; try { ev = c.interface.parseLog(l); } catch {} if (ev) onEvent(which, ev, l); }
+      next = to + 1;
     }
+    if (which === 'A') st.nextA = next; else st.nextB = next;
   }
-  async function scanB() {
-    st.headB = await pB.getBlockNumber();
-    const target = st.headB - LAG;
-    while (st.nextB <= target) {
-      const to = Math.min(target, st.nextB + CHUNK - 1);
-      const att = await logs(gate, gate.filters.Attested(), st.nextB, to); if (att === RETRY_LATER) break; if (!att) continue;
-      const del = await logs(gate, gate.filters.MessageDelivered(), st.nextB, to); if (del === RETRY_LATER) break; if (!del) continue;
-      const acc = await logs(gate, gate.filters.MessageAccepted(), st.nextB, to); if (acc === RETRY_LATER) break; if (!acc) continue;
-      for (const ev of att) {
-        if (!st.votes.has(ev.args.key)) st.votes.set(ev.args.key, new Map());
-        const m = st.votes.get(ev.args.key), v = ev.args.validator.toLowerCase();
-        if (!m.has(v)) st.voteCount++;
-        m.set(v, { txHash: ev.transactionHash, block: ev.blockNumber, nonce: Number(ev.args.nonce) });
+  async function readA() {
+    const [head, total] = await Promise.all([pA.getBlockNumber(), source.nonce()]);
+    st.headA = head; st.sentTotal = Number(total);
+  }
+  async function readB(full) {
+    const [head, count] = await Promise.all([pB.getBlockNumber(), gate.deliveryCount()]);
+    st.headB = head;
+    const n = Number(count);
+    if (n > st.dCount) {
+      const idx = Array.from({ length: n - st.dCount }, (_, i) => st.dCount + i);
+      const ds = await Promise.all(idx.map(i => gate.getDelivery(i)));
+      for (const d of ds) {
+        const nonce = Number(d.nonce);
+        upsert(st.delivered, nonce, { nonce, key: d.key, message: d.message, sender: d.sender, recipient: d.recipient, deliveredAt: Number(d.deliveredAt) });
+        upsert(st.sent, nonce, { nonce, key: d.key, message: d.message, sender: d.sender, recipient: d.recipient });
       }
-      for (const ev of del) {
-        const n = Number(ev.args.nonce);
-        st.delivered.set(n, { nonce: n, key: ev.args.key, txHash: ev.transactionHash, block: ev.blockNumber, message: ev.args.message, sender: ev.args.sender, recipient: ev.args.recipient });
-      }
-      for (const ev of acc) st.accepted.set(Number(ev.args.nonce), { txHash: ev.transactionHash, block: ev.blockNumber, recipient: ev.args.recipient });
-      st.nextB = to + 1;
+      st.dCount = n; full = true;
     }
+    // Who voted, and who accepted: re-checked every tick for messages being tracked here,
+    // and for everything (newest first, capped) on a full check.
+    const tracked = new Set([tracking.workspace?.nonce, tracking.demo?.nonce].filter(x => x != null));
+    const items = [...st.sent.values()].sort((a, b) => b.nonce - a.nonce)
+      .filter((m, i) => tracked.has(m.nonce) || (full && i < MAX_VOTE_CHECK));
+    const jobs = [];
+    for (const m of items) {
+      const known = votersOf(m.key);
+      if (known.size < N) for (const v of cfg.validators) {
+        if (!known.has(v.address.toLowerCase())) jobs.push(gate.hasVoted(m.key, v.address).then(y => { if (y) addVote(m.key, v.address, { nonce: m.nonce }); }));
+      }
+      if (st.delivered.has(m.nonce) && !st.accepted.has(m.nonce)) {
+        jobs.push(gate.accepted(m.nonce).then(y => { if (y) upsert(st.accepted, m.nonce, { recipient: m.recipient }); }));
+      }
+    }
+    await Promise.all(jobs);
   }
 
   /* ---------- refresh loop ---------- */
-  let busy = false;
+  let busy = false, tickNo = 0;
   async function refresh() {
     if (busy) return; busy = true;
+    const full = tickNo++ % 5 === 0;
     let okA = true, okB = true;
-    try { await scanA(); } catch (e) { okA = false; console.warn('Chain A', e); }
-    try { await scanB(); } catch (e) { okB = false; console.warn('Chain B', e); }
+    await Promise.all([
+      readA().catch(e => { okA = false; console.warn('Chain A', e); }),
+      readB(full).catch(e => { okB = false; console.warn('Chain B', e); }),
+    ]);
     if (okA && okB) {
       window.VM_STATUS = 'ready';
       notice('');
@@ -152,14 +191,20 @@ function main() {
       $('connection').textContent = 'Offline';
       $('topNetwork').textContent = `● ${okA ? '' : 'Chain A '}${okB ? '' : 'Chain B '}unavailable`;
       $('statusBadge').textContent = '● Connection unavailable'; $('statusBadge').className = 'status-badge offline';
-      notice(`Cannot reach ${okA ? '' : cfg.chainA.name + ' '}${okA || okB ? '' : 'or '}${okB ? '' : cfg.chainB.name}. ${cfg.local ? 'Is `npm run local` (or the Chain B node) still running?' : 'The public RPC may be busy; it retries automatically.'}`);
+      notice(`Cannot reach ${okA ? '' : cfg.chainA.name + ' '}${okA || okB ? '' : 'or '}${okB ? '' : cfg.chainB.name}. ${cfg.local ? 'Is `npm run local` (or the Chain B node) still running?' : 'The RPC did not answer; it retries automatically.'}`);
     }
-    $('sent').textContent = st.sent.size;
-    $('received').textContent = st.delivered.size;
+    renderAll();
+    // Live transaction hashes from the newest blocks. Failures here never block the page.
+    await Promise.all([okA && scanTip('A').catch(e => console.warn('Chain A logs', e)), okB && scanTip('B').catch(e => console.warn('Chain B logs', e))]);
+    renderAll();
+    busy = false;
+  }
+  function renderAll() {
+    $('sent').textContent = st.sentTotal;
+    $('received').textContent = st.dCount;
     $('audits').textContent = st.accepted.size;
     $('votesLabel').textContent = `Validator votes on Chain B: ${st.voteCount}`;
     renderHistory(); renderValidators(); renderJourney(); renderDemo(); renderInbox();
-    busy = false;
   }
   window.VM_REFRESH = refresh;
   $('refreshButton').addEventListener('click', refresh);
@@ -167,6 +212,8 @@ function main() {
   /* ---------- wallets ----------
    * Two people, two chains. The SAME MetaMask can play either role: it is switched to
    * Chain A to send (Person 1) and to Chain B to accept (Person 2).
+   * Transactions are sent with an explicit `from` address straight through the wallet
+   * (this is what MetaMask mobile needs), and confirmed through our own RPC.
    * In local mode without MetaMask, built-in demo wallets play both people. */
   let account = null;
   const chainHex = chain => '0x' + chain.chainId.toString(16);
@@ -174,9 +221,15 @@ function main() {
     try { await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: chainHex(chain) }] }); }
     catch (e) {
       if (e.code === 4902 || /unrecognized|not added|addEthereumChain/i.test(e.message || '')) {
-        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{ chainId: chainHex(chain), chainName: chain.name, rpcUrls: [fixRpc(chain.rpc)], nativeCurrency: { name: chain.currency, symbol: chain.currency, decimals: 18 }, blockExplorerUrls: chain.explorer ? [chain.explorer] : undefined }] });
+        await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [{ chainId: chainHex(chain), chainName: chain.name, rpcUrls: [fixRpc(chain.walletRpc || chain.rpc)], nativeCurrency: { name: chain.currency, symbol: chain.currency, decimals: 18 }, blockExplorerUrls: chain.explorer ? [chain.explorer] : undefined }] });
       } else throw e;
     }
+    for (let i = 0; i < 20; i++) { // wait until the wallet really is on that chain
+      const id = await window.ethereum.request({ method: 'eth_chainId' });
+      if (parseInt(id, 16) === chain.chainId) return;
+      await sleep(250);
+    }
+    throw new Error(`Please switch MetaMask to ${chain.name} and try again.`);
   }
   function showAccount(addr, how) {
     account = addr;
@@ -185,20 +238,23 @@ function main() {
     $('walletButton').title = how;
     renderInbox();
   }
-  /** Returns a signer on `chain` ('A' to send, 'B' to accept). */
-  async function signerOn(which) {
+  /** Connects a wallet on chain 'A' (to send) or 'B' (to accept). Returns { address, send(to, data) → tx hash }. */
+  async function walletOn(which) {
     const chain = which === 'A' ? cfg.chainA : cfg.chainB;
     if (window.ethereum) {
-      await window.ethereum.request({ method: 'eth_requestAccounts' });
+      const asked = await window.ethereum.request({ method: 'eth_requestAccounts' });
       await switchTo(chain);
-      const signer = await new ethers.BrowserProvider(window.ethereum).getSigner();
-      showAccount(await signer.getAddress(), `MetaMask on ${chain.name}`);
-      return signer;
+      const now = await window.ethereum.request({ method: 'eth_accounts' }).catch(() => []);
+      const raw = (now && now[0]) || (asked && asked[0]);
+      if (!raw || !ethers.isAddress(raw)) throw new Error('MetaMask did not share an account with this page. In MetaMask, connect this site to your account, then try again.');
+      const from = ethers.getAddress(raw);
+      showAccount(from, `MetaMask on ${chain.name}`);
+      return { address: from, send: (to, data) => window.ethereum.request({ method: 'eth_sendTransaction', params: [{ from, to, data, value: '0x0' }] }) };
     }
     if (cfg.local && cfg.demoKey) {
       const w = which === 'A' ? new ethers.Wallet(cfg.demoKey, pA) : new ethers.Wallet(cfg.demoRecipientKey, pB);
       showAccount(w.address, which === 'A' ? 'Local demo sender wallet (Person 1)' : 'Local demo receiver wallet (Person 2)');
-      return w;
+      return { address: w.address, send: async (to, data) => (await w.sendTransaction({ to, data })).hash };
     }
     throw new Error('No wallet found. Install MetaMask, or on a phone open this page inside the MetaMask app browser.');
   }
@@ -207,8 +263,14 @@ function main() {
     window.ethereum.request({ method: 'eth_accounts' }).then(a => { if (a?.[0]) showAccount(ethers.getAddress(a[0]), 'MetaMask'); }).catch(() => {});
   }
   $('walletButton').addEventListener('click', async () => {
-    try { await signerOn(location.hash === '#inbox' ? 'B' : 'A'); } catch (e) { notice(reasonOf(e)); navigate('overview'); }
+    try { await walletOn(location.hash === '#inbox' ? 'B' : 'A'); } catch (e) { notice(reasonOf(e)); navigate('overview'); }
   });
+  async function confirmed(provider, hash, what) {
+    const r = await provider.waitForTransaction(hash, 1, 300000);
+    if (!r) throw new Error(`${what} is taking unusually long. Check it in the block explorer: ${hash}`);
+    if (r.status !== 1) throw new Error(`${what} failed on chain (tx ${hash}).`);
+    return r;
+  }
 
   /* ---------- sending (shared by Workspace and Live Demo) ---------- */
   const tracking = { workspace: null, demo: null };
@@ -221,34 +283,60 @@ function main() {
     const recipient = checkRecipient(recipientRaw);
     if (!text) throw new Error('Type a message first.');
     if (new TextEncoder().encode(text).length > 240) throw new Error('Message is longer than 240 bytes.');
-    const signer = await signerOn('A');
-    const contract = new ethers.Contract(cfg.chainA.source, cfg.abis.source, signer);
+    const w = await walletOn('A');
+    await source.sendMessage.staticCall(cfg.chainB.chainId, recipient, text, { from: w.address }); // clear error before the wallet opens
     tracking[slot] = { message: text, recipient, txHash: null, nonce: null, startedAt: Date.now() };
     renderJourney(); renderDemo();
-    const tx = await contract.sendMessage(cfg.chainB.chainId, recipient, text);
-    tracking[slot].txHash = tx.hash; renderJourney(); renderDemo();
-    const r = await tx.wait();
-    const ev = r.logs.map(l => { try { return source.interface.parseLog(l); } catch { return null; } }).find(e => e?.name === 'MessageSent');
-    tracking[slot].nonce = Number(ev.args.nonce);
+    const hash = await w.send(cfg.chainA.source, source.interface.encodeFunctionData('sendMessage', [cfg.chainB.chainId, recipient, text]));
+    tracking[slot].txHash = hash; renderJourney(); renderDemo();
+    const r = await confirmed(pA, hash, 'The source transaction');
+    for (const l of r.logs) { let ev = null; try { ev = source.interface.parseLog(l); } catch {} if (ev?.name === 'MessageSent') { onEvent('A', ev, { ...l, transactionHash: hash, blockNumber: r.blockNumber }); tracking[slot].nonce = Number(ev.args.nonce); } }
     refresh();
     return tracking[slot];
   }
   async function acceptMessage(nonce) {
-    const signer = await signerOn('B');
-    const me = await signer.getAddress();
+    const w = await walletOn('B');
     const d = st.delivered.get(nonce);
-    if (d && !same(d.recipient, me)) throw new Error(`This message is addressed to ${short(d.recipient, 8, 6)}, but the connected wallet is ${short(me, 8, 6)}. Switch to the recipient's account in MetaMask.`);
-    const g = new ethers.Contract(cfg.chainB.gate, cfg.abis.gate, signer);
-    const tx = await g.accept(nonce);
-    await tx.wait();
-    await refresh();
-    return tx.hash;
+    if (d && !same(d.recipient, w.address)) throw new Error(`This message is addressed to ${short(d.recipient, 8, 6)}, but the connected wallet is ${short(w.address, 8, 6)}. Switch to the recipient's account in MetaMask.`);
+    await gate.accept.staticCall(nonce, { from: w.address }); // clear error before the wallet opens
+    const hash = await w.send(cfg.chainB.gate, gate.interface.encodeFunctionData('accept', [nonce]));
+    const r = await confirmed(pB, hash, 'The acceptance');
+    upsert(st.accepted, nonce, { txHash: hash, block: r.blockNumber, recipient: w.address });
+    renderAll(); refresh();
+    return hash;
+  }
+
+  /* ---------- finding transaction hashes for older records (on demand) ---------- */
+  async function blockNear(p, ts) {
+    const head = await p.getBlock('latest'), back = await p.getBlock(Math.max(0, head.number - 1000));
+    const bt = Math.max(0.5, (head.timestamp - back.timestamp) / (head.number - back.number));
+    return Math.round(head.number - (head.timestamp - ts) / bt);
+  }
+  async function locate(record) {
+    if (cfg.local || !record.deliveredAt) return;
+    if (!record.txHash) { // delivery tx on Chain B: emitted at deliveredAt
+      const est = await blockNear(pB, record.deliveredAt);
+      const topic = gate.interface.getEvent('MessageDelivered').topicHash;
+      for (const off of [0, -10, 10, -20, 20]) {
+        const lg = await pB.getLogs({ address: cfg.chainB.gate, topics: [topic, record.key], fromBlock: est + off - 5, toBlock: est + off + 4 }).catch(() => []);
+        if (lg[0]) { upsert(st.delivered, record.nonce, { txHash: lg[0].transactionHash, block: lg[0].blockNumber }); break; }
+      }
+    }
+    const src = st.sent.get(record.nonce);
+    if (src && !src.txHash) { // source tx on Chain A: some time before delivery (search back ~15 minutes)
+      const end = await blockNear(pA, record.deliveredAt);
+      const topic = source.interface.getEvent('MessageSent').topicHash, nTopic = ethers.toBeHex(record.nonce, 32);
+      for (let to = end + 2; to > end - 80; to -= 10) {
+        const lg = await pA.getLogs({ address: cfg.chainA.source, topics: [topic, nTopic], fromBlock: to - 9, toBlock: to }).catch(() => []);
+        if (lg[0]) { upsert(st.sent, record.nonce, { txHash: lg[0].transactionHash, block: lg[0].blockNumber }); break; }
+      }
+    }
   }
 
   /* ---------- journey stages, computed from chain state ---------- */
   function stagesFor(t) {
     const m = t?.nonce != null ? st.sent.get(t.nonce) : null;
-    const conf = m ? Math.max(0, st.headA - m.block + 1) : 0;
+    const conf = m ? (m.block == null ? cfg.confirmations : Math.max(0, st.headA - m.block + 1)) : 0;
     const confOk = m && conf >= cfg.confirmations;
     const voters = m ? votersOf(m.key) : new Map();
     const d = m ? st.delivered.get(m.nonce) : null;
@@ -259,11 +347,11 @@ function main() {
     const to = t?.recipient || m?.recipient;
     return [
       { title: 'Source transaction signed', desc: `${cfg.chainA.name} · Sender's own wallet emits MessageSent, addressed to ${to ? short(to, 8, 6) : 'the recipient'}`, label: 'Source tx:', value: t?.txHash || (t ? 'Waiting for wallet confirmation…' : 'Send a message to begin.'), url: t?.txHash && txUrl(cfg.chainA, t.txHash), mode: mode(!!m, !!t && !m) },
-      { title: 'Source block confirmations', desc: `Validators wait for ${cfg.confirmations} confirmation(s) so the event cannot be reorganised away`, label: m ? `Block #${m.block} · ` : '', value: m ? `${Math.min(conf, cfg.confirmations)} / ${cfg.confirmations} confirmations · nonce #${m.nonce}` : '—', mode: mode(confOk, !!m && !confOk) },
+      { title: 'Source block confirmations', desc: `Validators wait for ${cfg.confirmations} confirmation(s) so the event cannot be reorganised away`, label: m && m.block != null ? `Block #${m.block} · ` : '', value: m ? `${Math.min(conf, cfg.confirmations)} / ${cfg.confirmations} confirmations · nonce #${m.nonce}` : '—', mode: mode(confOk, !!m && !confOk) },
       { title: 'Independent validators verify', desc: 'Each validator re-reads the receipt and block hash through its own RPC provider', label: m ? `${voters.size} of ${N} confirmed:` : '', value: m ? (voterNames.join(', ') || 'Waiting for the first validator…') : '—', mode: mode(voters.size >= T, confOk && voters.size < T) },
-      { title: 'Threshold reached on Chain B', desc: `${cfg.chainB.name} · Gate counts on-chain votes, ${T} of ${N} required, no relay`, label: m ? `${voters.size} vote${voters.size === 1 ? '' : 's'} (${T} needed) ·` : '', value: m ? (voters.size ? [...voters.values()].map(v => short(v.txHash, 10, 6)).join(', ') : 'No votes yet') : '—', votes: m?.key, mode: mode(voters.size >= T, confOk && voters.size > 0 && voters.size < T) },
-      { title: 'Delivered to the recipient', desc: `${cfg.chainB.name} · Gate emits MessageDelivered for ${to ? short(to, 8, 6) : 'the recipient'}`, label: 'Delivery tx:', value: delivered ? d.txHash : '—', url: delivered && txUrl(cfg.chainB, d.txHash), mode: mode(delivered, voters.size >= T && !delivered) },
-      { title: 'Accepted by the recipient', desc: `${cfg.chainB.name} · Recipient signs accept() with their own wallet — nobody else can`, label: acc ? 'Accept tx:' : '', value: acc ? acc.txHash : delivered ? 'Waiting for the recipient — open "My Inbox" on their device' : '—', url: acc && txUrl(cfg.chainB, acc.txHash), mode: mode(!!acc, delivered && !acc) },
+      { title: 'Threshold reached on Chain B', desc: `${cfg.chainB.name} · Gate counts on-chain votes, ${T} of ${N} required, no relay`, label: m ? `${voters.size} vote${voters.size === 1 ? '' : 's'} (${T} needed) ·` : '', value: m ? (voters.size ? [...voters.entries()].map(([a, v]) => v.txHash ? short(v.txHash, 10, 6) : `${vName(a)} ✓`).join(', ') : 'No votes yet') : '—', votes: m?.key, mode: mode(voters.size >= T, confOk && voters.size > 0 && voters.size < T) },
+      { title: 'Delivered to the recipient', desc: `${cfg.chainB.name} · Gate emits MessageDelivered for ${to ? short(to, 8, 6) : 'the recipient'}`, label: 'Delivery tx:', value: delivered ? (d.txHash || 'delivered ✓') : '—', url: delivered && d.txHash && txUrl(cfg.chainB, d.txHash), mode: mode(delivered, voters.size >= T && !delivered) },
+      { title: 'Accepted by the recipient', desc: `${cfg.chainB.name} · Recipient signs accept() with their own wallet — nobody else can`, label: acc ? 'Accept tx:' : '', value: acc ? (acc.txHash || 'accepted ✓') : delivered ? 'Waiting for the recipient — open "My Inbox" on their device' : '—', url: acc && acc.txHash && txUrl(cfg.chainB, acc.txHash), mode: mode(!!acc, delivered && !acc) },
     ].map(s => ({ ...s, m, d: delivered ? d : null, acc }));
   }
 
@@ -393,10 +481,10 @@ function main() {
       const a = el('td'); a.append(el('code', short(item.key), 'mono')); tr.append(a);
       const msg = el('td', item.message, 'table-message'); msg.title = item.message; tr.append(msg);
       const route = el('td', `${short(item.sender, 6, 4)} → ${short(item.recipient, 6, 4)}`, 'mono'); route.title = `${cfg.chainA.name} ${item.sender} → ${cfg.chainB.name} ${item.recipient}`; tr.append(route);
-      tr.append(el('td', short(item.txHash, 10, 6), 'mono'));
-      tr.append(el('td', item.block));
+      tr.append(el('td', item.txHash ? short(item.txHash, 10, 6) : '—', 'mono'));
+      tr.append(el('td', item.block ?? '—'));
       const acc = st.accepted.get(item.nonce);
-      const stc = el('td'); stc.append(el('span', acc ? `Accepted ✓ · ${votersOf(item.key).size}/${N}` : `Delivered · awaiting recipient`, acc ? 'accepted-chip' : 'delivered-chip')); tr.append(stc);
+      const stc = el('td'); const vsz = votersOf(item.key).size; stc.append(el('span', acc ? `Accepted ✓${vsz ? ` · ${vsz}/${N}` : ''}` : `Delivered · awaiting recipient`, acc ? 'accepted-chip' : 'delivered-chip')); tr.append(stc);
       const action = el('td'); const btn = el('button', 'View ↗', 'table-action'); btn.addEventListener('click', () => openDetails(item)); action.append(btn); tr.append(action);
       tbody.append(tr);
     }
@@ -407,8 +495,11 @@ function main() {
     else row.append(el('code', value == null ? '—' : String(value), 'detail-value'));
     parent.append(row);
   }
-  function openDetails(record) {
+  function openDetails(record, again) {
     selected = record;
+    if (!again && !cfg.local && (!record.txHash || !st.sent.get(record.nonce)?.txHash)) {
+      locate(record).then(() => { if (selected === record && $('details').open) openDetails(st.delivered.get(record.nonce) || record, true); }).catch(() => {});
+    }
     const p = $('detailFields'); p.replaceChildren();
     const src = st.sent.get(record.nonce);
     const voters = votersOf(record.key);
@@ -419,14 +510,16 @@ function main() {
     field(p, 'Message nonce', record.nonce);
     field(p, `Sender wallet (${cfg.chainA.name})`, record.sender);
     field(p, `Recipient wallet (${cfg.chainB.name})`, record.recipient);
+    const looking = again ? 'not found nearby — see the contract on the explorer' : 'looking it up…';
     if (src && src.key === record.key) {
-      field(p, `Source transaction (${cfg.chainA.name})`, src.txHash, txUrl(cfg.chainA, src.txHash));
-      field(p, 'Source block', src.block);
+      field(p, `Source transaction (${cfg.chainA.name})`, src.txHash || looking, src.txHash && txUrl(cfg.chainA, src.txHash));
+      if (src.block != null) field(p, 'Source block', src.block);
     }
-    for (const [addr, v] of voters) field(p, `Vote · ${vName(addr)}`, v.txHash, txUrl(cfg.chainB, v.txHash));
-    field(p, `Destination delivery tx (${cfg.chainB.name})`, record.txHash, txUrl(cfg.chainB, record.txHash));
-    field(p, 'Destination block', record.block);
-    field(p, 'Recipient acceptance', acc ? acc.txHash : 'Not accepted yet', acc && txUrl(cfg.chainB, acc.txHash));
+    for (const [addr, v] of voters) field(p, `Vote · ${vName(addr)}`, v.txHash || 'voted ✓', v.txHash && txUrl(cfg.chainB, v.txHash));
+    field(p, `Destination delivery tx (${cfg.chainB.name})`, record.txHash || looking, record.txHash && txUrl(cfg.chainB, record.txHash));
+    if (record.block != null) field(p, 'Destination block', record.block);
+    field(p, 'Recipient acceptance', acc ? (acc.txHash || 'Accepted ✓') : 'Not accepted yet', acc && acc.txHash && txUrl(cfg.chainB, acc.txHash));
+    if (cfg.chainB.explorer) field(p, 'All transactions of the gate contract', `${cfg.chainB.explorer}/address/${cfg.chainB.gate}`, `${cfg.chainB.explorer}/address/${cfg.chainB.gate}`);
     $('integrityMessage').value = record.message; $('integrityResult').hidden = true;
     $('details').showModal();
   }
@@ -448,9 +541,9 @@ function main() {
     $('validatorList').replaceChildren(...cfg.validators.map((v, i) => {
       const lower = v.address.toLowerCase();
       const mine = [...st.votes.values()].map(m => m.get(lower)).filter(Boolean);
-      const last = mine.sort((a, b) => b.block - a.block)[0];
+      const last = mine.sort((a, b) => (b.nonce ?? 0) - (a.nonce ?? 0))[0];
       // "Behind" = a message old enough to vote on that this validator has not voted for.
-      const ready = sentList.filter(m => st.headA - m.block + 1 >= cfg.confirmations + 2);
+      const ready = sentList.slice(0, MAX_VOTE_CHECK).filter(m => m.block == null || st.headA - m.block + 1 >= cfg.confirmations + 2);
       const missed = ready.filter(m => !votersOf(m.key).has(lower)).length;
       const state = !ready.length ? ['Waiting for messages', 'idle'] : missed === 0 ? ['Active · up to date', 'online'] : [`Behind on ${missed} message${missed > 1 ? 's' : ''}`, 'offline'];
       const card = el('div', undefined, 'panel validator-card');
@@ -516,7 +609,7 @@ function main() {
     const voter = cfg.validators[0].address;
     const why = await expectRevert(() => gate.attest.staticCall(d.nonce, d.sender, d.recipient, tampered, { from: voter }));
     return why
-      ? [`Altered message REJECTED. The source event for #${d.nonce} on ${cfg.chainA.name}${src ? ` (block ${src.block})` : ''} ${evidence} the tampered text, so honest validators refuse it — and even a validator pushing it gets "${why}".`, false]
+      ? [`Altered message REJECTED. The source event for #${d.nonce} on ${cfg.chainA.name}${src?.block != null ? ` (block ${src.block})` : ''} ${evidence} the tampered text, so honest validators refuse it — and even a validator pushing it gets "${why}".`, false]
       : ['Tampered message was NOT rejected.', true];
   });
 
@@ -575,8 +668,11 @@ function main() {
     try {
       inboxAddr = null; $('inboxLookup').value = '';
       // Let the receiver pick WHICH account to use, instead of reusing whatever is already connected.
-      if (window.ethereum) await window.ethereum.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] });
-      await signerOn('B');
+      if (window.ethereum) {
+        try { await window.ethereum.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] }); }
+        catch (e) { if (e.code === 4001) throw e; } // some wallets (e.g. mobile) don't support the picker; carry on
+      }
+      await walletOn('B');
     }
     catch (e) { $('inboxResult').hidden = false; $('inboxResult').textContent = reasonOf(e); }
   });
@@ -592,7 +688,7 @@ function main() {
   $('recipient').value = demoBob; $('demoRecipient').value = demoBob;
   $('recipient').addEventListener('input', () => { $('recipient').dataset.touched = '1'; });
   $('recipientMine').addEventListener('click', async () => {
-    try { if (!account) await signerOn('A'); $('recipient').value = account; $('recipient').dataset.touched = '1'; } catch (e) { show('sendResult', reasonOf(e), true); }
+    try { if (!account) await walletOn('A'); $('recipient').value = account; $('recipient').dataset.touched = '1'; } catch (e) { show('sendResult', reasonOf(e), true); }
   });
 
   /* ---------- go ---------- */

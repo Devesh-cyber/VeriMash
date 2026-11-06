@@ -51,7 +51,7 @@ async function deploy(opts) {
   const gateAddress = await gate.getAddress();
   console.log(`  ${gateAddress} (block ${gateReceipt.blockNumber})`);
 
-  const meta = (id, rpc) => ({ chainId: id, ...(PRESETS[id] || { name: `Chain ${id}`, currency: "ETH", explorer: "" }), rpc });
+  const meta = (id, rpc) => ({ chainId: id, ...(PRESETS[id] || { name: `Chain ${id}`, currency: "ETH", explorer: "" }), rpc, walletRpc: PRESETS[id]?.publicRpc || rpc });
   const deployment = {
     createdAt: new Date().toISOString(),
     local,
@@ -69,7 +69,7 @@ async function deploy(opts) {
   return deployment;
 }
 
-module.exports = { deploy };
+module.exports = { deploy, PRESETS };
 
 if (require.main === module) {
   loadEnvFile(path.join(ROOT, ".env"));
