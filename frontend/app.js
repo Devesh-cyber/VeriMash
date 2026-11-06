@@ -82,15 +82,26 @@ function main() {
   };
   const votersOf = key => st.votes.get(key) || new Map();
 
+  // Public RPCs are load-balanced: one server can be a block or two behind another.
+  // So we read logs a few blocks behind the tip, and treat "beyond head" errors as "try again next tick".
+  const LAG = cfg.local ? 0 : 3;
+  const RETRY_LATER = Symbol('retry');
   async function logs(contract, filter, from, to) {
     try { return await contract.queryFilter(filter, from, to); }
-    catch (e) { if (CHUNK > 10) { CHUNK = Math.max(10, Math.floor(CHUNK / 4)); return null; } throw e; } // RPC range limit: shrink and retry
+    catch (e) {
+      const msg = String(e?.error?.message || e?.info?.error?.message || e?.shortMessage || e?.message || '');
+      if (/beyond current head|head block|header not found|unknown block|block not found|after last accepted/i.test(msg)) return RETRY_LATER;
+      if (CHUNK > 10) { CHUNK = Math.max(10, Math.floor(CHUNK / 4)); return null; } // RPC range limit: shrink and retry
+      throw e;
+    }
   }
   async function scanA() {
     st.headA = await pA.getBlockNumber();
-    while (st.nextA <= st.headA) {
-      const to = Math.min(st.headA, st.nextA + CHUNK - 1);
+    const target = st.headA - LAG;
+    while (st.nextA <= target) {
+      const to = Math.min(target, st.nextA + CHUNK - 1);
       const evs = await logs(source, source.filters.MessageSent(), st.nextA, to);
+      if (evs === RETRY_LATER) break;
       if (!evs) continue;
       for (const ev of evs) {
         if (Number(ev.args.destChainId) !== cfg.chainB.chainId) continue;
@@ -102,11 +113,12 @@ function main() {
   }
   async function scanB() {
     st.headB = await pB.getBlockNumber();
-    while (st.nextB <= st.headB) {
-      const to = Math.min(st.headB, st.nextB + CHUNK - 1);
-      const att = await logs(gate, gate.filters.Attested(), st.nextB, to); if (!att) continue;
-      const del = await logs(gate, gate.filters.MessageDelivered(), st.nextB, to); if (!del) continue;
-      const acc = await logs(gate, gate.filters.MessageAccepted(), st.nextB, to); if (!acc) continue;
+    const target = st.headB - LAG;
+    while (st.nextB <= target) {
+      const to = Math.min(target, st.nextB + CHUNK - 1);
+      const att = await logs(gate, gate.filters.Attested(), st.nextB, to); if (att === RETRY_LATER) break; if (!att) continue;
+      const del = await logs(gate, gate.filters.MessageDelivered(), st.nextB, to); if (del === RETRY_LATER) break; if (!del) continue;
+      const acc = await logs(gate, gate.filters.MessageAccepted(), st.nextB, to); if (acc === RETRY_LATER) break; if (!acc) continue;
       for (const ev of att) {
         if (!st.votes.has(ev.args.key)) st.votes.set(ev.args.key, new Map());
         const m = st.votes.get(ev.args.key), v = ev.args.validator.toLowerCase();
@@ -560,7 +572,12 @@ function main() {
     }
   }
   $('inboxConnect').addEventListener('click', async () => {
-    try { inboxAddr = null; $('inboxLookup').value = ''; await signerOn('B'); }
+    try {
+      inboxAddr = null; $('inboxLookup').value = '';
+      // Let the receiver pick WHICH account to use, instead of reusing whatever is already connected.
+      if (window.ethereum) await window.ethereum.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] });
+      await signerOn('B');
+    }
     catch (e) { $('inboxResult').hidden = false; $('inboxResult').textContent = reasonOf(e); }
   });
   $('inboxLookupBtn').addEventListener('click', () => {

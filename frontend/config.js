@@ -1,5 +1,5 @@
 window.VERIMASH = {
-  "createdAt": "2026-11-05T18:32:31.590Z",
+  "createdAt": "2026-11-06T04:38:55.728Z",
   "local": false,
   "threshold": 2,
   "confirmations": 2,
@@ -10,18 +10,18 @@ window.VERIMASH = {
     "explorer": "https://sepolia.etherscan.io",
     "publicRpc": "https://ethereum-sepolia-rpc.publicnode.com",
     "rpc": "https://ethereum-sepolia-rpc.publicnode.com",
-    "source": "0xf2a14ddFa5c6b212D95DDd89E68cE365Dc0633b0",
-    "deployBlock": 12071278
+    "source": "0xFfb9E2AE8Cc3C42b791aF03F1881153b104bbca5",
+    "deployBlock": 12074256
   },
   "chainB": {
-    "chainId": 31338,
-    "name": "Local Chain B",
+    "chainId": 84532,
+    "name": "Base Sepolia",
     "currency": "ETH",
-    "explorer": "",
-    "publicRpc": "http://127.0.0.1:8546",
-    "rpc": "http://127.0.0.1:8546",
+    "explorer": "https://sepolia.basescan.org",
+    "publicRpc": "https://sepolia.base.org",
+    "rpc": "https://sepolia.base.org",
     "gate": "0x29FbA6c546a0Cc426df153e3BA4FCB2151a53efD",
-    "deployBlock": 3319
+    "deployBlock": 55090334
   },
   "validators": [
     {
